@@ -1,0 +1,106 @@
+GOAL: add a "confirm before save" step to the DATA-ENTRY screens only (the screens where a user
+submits an action that writes to the DB). This does NOT apply to display/list screens — see
+SCOPE below. Source: "מסמך אפיון מודול תפעול בריכות.pdf" (workspace root, newest spec file),
+pages 6 and 9 for cycle open/close, pages 20-23 for weighing/transfer-marketing confirmation
+screens (rendered as images — if you need to re-view them, use PyMuPDF: `pip install pymupdf
+--break-system-packages` then `fitz.open(path)[i].get_pixmap(matrix=fitz.Matrix(2,2)).save(...)`
+since this PDF has embedded screenshots that plain text extraction misses).
+
+THE PATTERN, per the spec (quoted, pages 6 and 9 — identical wording for open and close):
+"בלחיצה על כפתור ביצוע פעולה, ולאחר בדיקת התנאים - להוציא הודעת אישור שמסכמת את הפעולה. אם
+הפעולה תקינה - להציג הודעה המפרטת את השינוי וכפתור לאישור. העדכון יישמר בבסיס הנתונים רק לאחר
+אישור ההודעה. לאחר שמירה תסגר ההודעה ומסך פתיחה/עדכון חוזרים למסך התפעול."
+(= on clicking the action button, after validating: show a confirmation message summarizing the
+change, with a confirm button. The record is only written to the DB after the user confirms. On
+confirm, the dialog closes and the screen returns to the operations screen.)
+
+Rejection path (also identical wording for open and close, page 6 and 10):
+"אם לפחות אחד מהתנאים הנ"ל לא מתקיים - אין לאפשר שמירה. תופיע הודעה אדומה עם פירוט הבעיה וכפתור
+לסגירת ההודעה. סגירת חזרה למסך פתיחה/עדכון מחזור." — this is a specific, separate UI element,
+not generic inline text: a dismissible red message box, with its own explicit close/dismiss
+button, that the user closes to return to the editable form. Build it exactly as specified, even
+though it looks similar to what exists today:
+  - The five entry screens currently show plain inline red text
+    (`{error && <p className="text-red-600...">}`) with NO close button — this does NOT satisfy
+    the spec. Replace it (don't just leave it) with a dismissible error banner component: red
+    background, the problem detail text, and an explicit "✕" or "סגור" button that clears the
+    error state and returns focus to the form. Build one shared component (e.g.
+    `src/components/ErrorBanner.tsx`) and use it in all five screens rather than five separate
+    implementations.
+  - This banner must appear both for client-side validation failures (before the confirm dialog
+    ever opens) and for server-side failures (if the POST/PATCH itself fails after the user
+    confirms) — same component, same behavior, in both places.
+
+For weighing (page 21) and marketing-transfer (page 23) the confirmation takes the form of a
+green-checkmark card titled "סיכום שקילה" / "סיכום העברת שיווק" listing every value about to be
+saved (date/time, weighing or transfer type, pond, tank, cycle code, basket rows and computed
+totals), with a "שמור שקילה" (save) button and a cancel button — functionally the same pattern,
+just styled as a positive/green summary instead of a plain confirm box.
+
+SCOPE — apply ONLY to these data-entry screens, do NOT touch display/list screens:
+  - src/app/cycles/[pondId]/CycleForm.tsx (open new cycle / edit open cycle)
+  - src/app/cycles/[pondId]/close/CloseForm.tsx (close cycle / edit closed cycle)
+  - src/app/transfers/new/NewTransferForm.tsx (create transfer — all 4 types)
+  - src/app/transfers/[id]/TransferDetailManager.tsx (the "סכם העברה" / finalize-transfer action,
+    and tank-row save actions within it, if those also write immediately today)
+  - src/app/transfers/[id]/BasketWeighingModal.tsx (save basket weighing)
+  - Whatever new "+ הוסף שקילה" component gets built per CLAUDE_CODE_PROMPT_weighing_fixes.txt
+    (if that prompt has already been run — add the same confirm step there too)
+Do NOT add a confirm dialog to: /cycles, /transfers, /weighings list pages, the pond/cycle detail
+banners, or the dashboard — those are read-only displays with no save action to confirm.
+
+WHAT TO BUILD
+================
+For each of the entry screens listed above:
+1. Split the current single-step "validate + immediately POST/PATCH" handler into two steps:
+   a. On submit: run client-side validation as today (required fields, date ranges, etc.). If
+      invalid, show the existing red inline error — no confirm dialog needed for plain field
+      validation, only once the form is otherwise ready to save.
+   b. If valid, open a confirmation modal/dialog (reuse the project's existing modal pattern from
+      BasketWeighingModal.tsx if one exists, or build a small shared `ConfirmDialog` component in
+      src/components/ if no shared modal exists yet) summarizing exactly what will be written:
+      - Cycle open/update: pond name, the computed קוד מחזור (date-only, per
+        CLAUDE_CODE_PROMPT_cycle_app_code.txt), מחזור פריוריטי (or "לא הוזן" if empty), תאריך
+        פתיחה, הערות. Title: "אישור פתיחת מחזור גידול" or "אישור עדכון פרטי מחזור" depending on
+        isEdit.
+      - Cycle close: same fields plus the fish-balance summary that's already computed and shown
+        inline today in CloseForm.tsx (balance.incoming/outgoing/mortality/difference) — carry
+        that same block into the confirm dialog rather than duplicating logic. Title: "אישור
+        סגירת מחזור גידול".
+      - Transfer: transfer type, pond, date, קוד מחזור, and a compact list of the tank rows about
+        to be saved (fish type, weight, count per row) with totals. Title depends on transfer
+        type, e.g. "אישור העברת דילול".
+      - Weighing: date/time, weighing type, pond, tank, קוד מחזור, basket rows with totals. Title
+        "סיכום שקילה".
+   c. Only on explicit confirm inside that dialog does the existing fetch(POST/PATCH) call fire.
+      Cancel/close just dismisses the dialog and returns to the editable form, no request sent.
+   d. If the save request itself fails (server-side validation, network error), close the
+      confirm dialog and show the existing red inline error on the form — don't silently fail
+      inside the dialog.
+2. Keep all existing validation logic, RBAC, and audit-log calls exactly as they are — this is
+   purely an added confirmation step in the UI flow, not a change to what gets validated or
+   saved.
+3. Style: green/teal for the confirm button (matches BTN_PRIMARY conventions already in these
+   files), keep Hebrew RTL layout, reuse INPUT/BTN_PRIMARY-style constants already defined per
+   file rather than inventing new ones.
+
+GUARDRAILS
+============
+- Don't change any validation rule, RBAC check, or audit-log payload — only the save/UX flow.
+- Don't add this pattern to any list/display screen.
+- Don't build a generic "are you sure" browser confirm() — the spec wants a styled in-app dialog
+  that shows the actual values about to be saved, not a generic yes/no prompt.
+- If a shared ConfirmDialog component doesn't exist yet, create one reusable component rather
+  than copy-pasting modal markup into all five screens.
+
+VERIFY BEFORE REPORTING DONE
+================================
+1. Open a new growth cycle: fill the form, submit — confirm a summary dialog appears showing the
+   pond, app cycle code, priority code (or "לא הוזן"), and date, and that nothing is written to
+   the DB until you click confirm inside the dialog. Cancel once to confirm no row was created,
+   then redo and confirm — row should appear.
+2. Close a cycle with the balance out of tolerance — confirm the same balance warning shown today
+   inline also appears inside the confirmation dialog before the close is committed.
+3. Create a transfer (any type) and a basket weighing — confirm both show a pre-save summary
+   dialog with the correct values, and that canceling leaves no row written.
+4. Confirm /cycles, /transfers, /weighings list pages and the dashboard are completely unchanged.

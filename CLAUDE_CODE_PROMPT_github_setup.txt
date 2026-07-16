@@ -1,0 +1,80 @@
+GOAL: set up this repo on GitHub for the first time, with a clean two-branch workflow from
+day one (`main` = stable/production, `dev` = where day-to-day work actually happens) — not
+a one-off push. No GitHub repo exists yet; nothing has been done on this front so far.
+
+STEP 0 — security review FIRST, before any `git add`
+========================================================
+Run everything in `app/CLAUDE_CODE_PROMPT_pre_git_security_review.txt` before touching git
+at all. Do not proceed past this step until that review reports PASS. If it reports any
+real hit (not a placeholder), stop and fix it before continuing — do not init/commit around
+a known issue "to deal with later."
+
+STEP 1 — figure out how to create the remote repo
+=====================================================
+Check whether GitHub CLI is available and authenticated: `gh auth status`.
+  - If authenticated: use it. Create a **private** repo (real worker PII and DB schema
+    details live in this codebase even after the security review — private regardless of
+    how clean the review comes back, as defense in depth): `gh repo create <name> --private
+    --source=. --remote=origin` (don't push yet, just create + wire the remote).
+  - If `gh` is not installed/authenticated: stop and tell the user exactly what to click
+    through on github.com (New repository → private → no README/.gitignore/license, since
+    this repo already has its own files) and the exact remote name to give it, then wait for
+    them to paste back the repo URL before continuing. Don't guess a repo name or org.
+
+STEP 1.5 — delete the prompt files before they can ever be staged
+=====================================================================
+Delete all `app/CLAUDE_CODE_PROMPT_*.txt` files (this one included) — they're internal
+working notes for this build session, not part of the app, and must never end up in any
+commit on any branch, not even `dev`. Do this now, before `git init`/`git add`, so there's
+no window where they exist in the working tree at the same time as a `.git` folder. If the
+user wants to keep a copy for their own records, that's their call to make separately
+*outside* this repo folder — don't ask, don't keep a copy inside the repo "just in case."
+
+STEP 2 — init, first commit, on `main`
+=========================================
+- `git init` (if not already done), confirm default branch name is `main` (rename from
+  `master` if needed: `git branch -m main`).
+- `git add -A`, then re-run the Step 3 content-grep from the security-review prompt one more
+  time against what's actually staged (`git diff --cached --name-only` + grep) — catching a
+  secret here, after `git add` but before `git commit`, is still cheap; catching it after
+  `git push` is not.
+- `git commit -m "Initial commit"`.
+- `git remote add origin <url>` (skip if `gh repo create --source=. --remote=origin` already
+  did this in Step 1).
+- `git push -u origin main`.
+
+STEP 3 — create `dev` immediately, and make it the working branch
+=====================================================================
+- `git checkout -b dev`, `git push -u origin dev`.
+- Leave the local checkout on `dev` when you finish — `main` should only get updated via
+  merge/PR from `dev`, never direct commits, starting now.
+- This `dev` git branch is the intended counterpart to the existing Neon **dev** database
+  branch (`.env` already points at it) — keep that pairing going forward: work happens on
+  git `dev` + Neon `dev`, and only promote to git `main` + Neon production together, once
+  there's an actual production go-live.
+
+STEP 4 — protect `main` on GitHub
+====================================
+Turn on branch protection for `main` so nobody (including future you) can push to it
+directly: require a pull request before merging, no direct pushes. If `gh` is available:
+`gh api repos/{owner}/{repo}/branches/main/protection --method PUT --input -` with the
+appropriate JSON body (require_pull_request_reviews, no required status checks needed yet
+since there's no CI). If not available via CLI, tell the user the exact Settings page to
+go to (Settings → Branches → Add branch protection rule → `main`) and what to check.
+
+STEP 5 — final report
+========================
+Confirm: repo URL, that both `main` and `dev` exist remotely, that branch protection is on
+for `main` (or exact manual steps still needed if `gh` wasn't available for Step 4), that
+the Step 0 security review passed cleanly with nothing suppressed, and that the
+`CLAUDE_CODE_PROMPT_*.txt` files were deleted (Step 1.5) and never appear in `git log` on
+any branch. State plainly which branch the local checkout is on right now.
+
+GUARDRAILS
+============
+- Never run `git push --force` anywhere in this flow.
+- Never push directly to `main` after step 2's initial commit — everything after that goes
+  through `dev`.
+- If Step 0's security review fails, this entire task stops there — don't work around it.
+- The `CLAUDE_CODE_PROMPT_*.txt` files must not exist in the working tree by the time
+  `git add -A` runs, and must not appear in any commit, on `main` or `dev`.

@@ -1,0 +1,86 @@
+GOAL: fix a weightType bug found during verification of the weighing flow, and add a
+standalone screen for logging field/net (ניטור) weighings that aren't tied to a transfer.
+Two independent issues — fix both, in order.
+
+ISSUE 1 — wrong weightType used for transfer basket weighings
+================================================================
+File: src/app/transfers/[id]/TransferDetailManager.tsx (line ~109)
+
+Current code:
+  const fieldWeighTypeId = weightTypes.find((wt) => wt.name.includes("שטח"))?.id
+    ?? weightTypes[0]?.id ?? "";
+
+This matches "שקילת ניטור-שטח" (field monitoring) — wrong. Basket weighings created from
+a transfer (דילול/פירוק/שיווק) should use the third seeded weight type, "שקילת אפיון טנק"
+(tank characterization) — see prisma/seed.ts line ~444:
+  const weightTypeNames = ["שקילת ניטור-שטח", "שקילת ניטור-רשת", "שקילת אפיון טנק"];
+
+Fix:
+- Change the `.includes("שטח")` match to `.includes("אפיון טנק")`.
+- Rename the variable from `fieldWeighTypeId` to `tankWeighTypeId` (or similar) so this
+  doesn't get misread again — it's currently named after the wrong concept.
+- Update the prop name passed into <BasketWeighingModal weightTypeId={...} /> at the bottom
+  of the same file accordingly (prop name itself can stay `weightTypeId`, just fix the
+  variable feeding it).
+- No schema change needed — `שקילת אפיון טנק` already exists in seed data.
+
+Side effect to check: src/app/weighings/page.tsx filters the two tabs by
+`weightType.name.contains("שטח")` and `contains("רשת")`. Tank-characterization weighings
+(אפיון טנק) won't match either filter, which is correct — they stay visible only inside the
+transfer detail screen where they're created, same as before. Don't add a third tab for
+this unless asked; just confirm after the fix that the field/net tabs are no longer polluted
+with transfer-basket weighings (currently they are, because of the bug above).
+
+ISSUE 2 — no standalone screen exists to log ניטור (field/net) weighings
+============================================================================
+Today the only way to create a FishWeighingHeader is the "+ שקול" button inside a transfer's
+detail rows (gated to דילול/פירוק/שיווק). There is no way to log a routine sampling weighing
+(שקילת ניטור-שטח or שקילת ניטור-רשת) that isn't tied to a transfer — e.g. weekly growth
+sampling on a pond with no transfer happening that day. This is a real gap, not a permissions
+issue.
+
+Build: an "+ הוסף שקילה" button on the /weighings page (src/app/weighings/WeighingsClient.tsx),
+opening a form (modal, reuse the visual style of transfers/[id]/BasketWeighingModal.tsx) with:
+- תאריך (date, default today, max today)
+- בריכה (pond select — pass the pond list down from page.tsx, same source as transfers/new)
+- סוג שקילה — toggle/select between שטח and רשת; default to whichever tab is currently active
+  in WeighingsClient
+- שם שוקל (staffName, optional text)
+- הערות (optional text)
+- then basket rows using the same add/remove pattern as BasketWeighingModal.tsx (ריק רטוב /
+  עם דגים / מספר דגים, with the same wf > ew validation)
+
+Wiring:
+- POST to the existing /api/weighings (src/app/api/weighings/route.ts) — no transferDetailId,
+  weightTypeId resolved from the שטח/רשת choice against the weightTypes list already passed
+  into WeighingsClient as a prop.
+- cycleId: resolve the pond's currently-open growth cycle the same way
+  src/app/api/transfers/route.ts (lines ~35-48) does — findFirst GrowthCycle where
+  openedAt <= date AND (closedAt is null OR closedAt >= date). If none found, block creation
+  with the same error message pattern: "לא נמצא מחזור גידול פתוח לבריכה זו בתאריך שנבחר —
+  פתח מחזור גידול תחילה" (422). Do this check server-side in the POST handler, not just
+  client-side — this gating logic currently only exists in the transfers route, so it needs
+  to be added to (or shared with) the weighings POST handler.
+- Then POST baskets to /api/weighings/[id]/baskets per row, same as BasketWeighingModal does.
+- Permission: same as the rest of this module — withModuleAccess("תפעול", AccessLevel.OPERATIONS).
+- writeAudit() on header creation — already present in the weighings POST route, keep it.
+- After save, refresh the relevant tab's list (refetch or router.refresh()) so the new row
+  shows immediately without a manual page reload.
+
+GUARDRAILS
+============
+- Don't touch the transfer-based weighing flow beyond the Issue 1 variable/match fix.
+- Don't change schema.prisma — both weight types and the cycle model already support this.
+- Match existing Hebrew labels/copy style — don't invent new terminology.
+- Keep RBAC identical to the rest of /weighings (OPERATIONS on תפעול).
+
+VERIFY BEFORE REPORTING DONE
+================================
+1. Create a transfer (דילול) basket weighing and confirm it now tags with שקילת אפיון טנק,
+   not שקילת ניטור-שטח — and confirm it no longer shows up under the שטח tab on /weighings.
+2. Use the new "+ הוסף שקילה" button to log a שטח weighing on a pond with an open cycle —
+   confirm it appears in the שטח tab immediately.
+3. Try logging a weighing on a pond with no open growth cycle — confirm it's blocked with the
+   422 error, same as the transfer flow.
+4. Confirm WEIGHABLE_TYPES gating in TransferDetailManager.tsx is untouched (still exactly
+   ["דילול", "פירוק", "שיווק"]).

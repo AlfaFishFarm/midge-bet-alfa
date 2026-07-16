@@ -1,0 +1,151 @@
+CONTEXT
+=======
+Repo: this folder. Read `CLAUDE.md` first — it has the security standing-rule, RBAC pattern,
+audit pattern, and architecture. Spec source: `מסמך אפיון מודול תפעול בריכות.docx` in the
+project root (operations-module spec, Hebrew). I (a prior Claude session) already read the
+full spec and laid groundwork:
+  - `src/lib/cycles.ts` already exists — pure helpers: `isVirtualPondType(name)`,
+    `formatCycleLabel(pondCode, openedAt)`, `getCycleFishBalance(cycleId)`,
+    `hasTransfersBefore(cycleId, date)`, `hasTransfersAfter(cycleId, date)`,
+    `hasOverlappingCycle(pondId, start, end, excludeCycleId?)`. Use these, don't recreate them.
+  - `src/lib/business-rules.ts` has `checkFishBalance()` / `FISH_BALANCE_TOLERANCE = 100`.
+  - `PondType.name` is free text (no boolean flag) — physical vs virtual is detected via
+    `isVirtualPondType()`, which matches on the substring "וירטואלית".
+
+GOAL
+====
+Replace the placeholder pages for the תפעול (Operations) module with real screens, in this
+order (matches task list items #34–38). Each item below is a full unit: page(s) + API
+route(s) + the permission level it needs.
+
+You are working **autonomously while the user is away** — don't stop and wait for a reply.
+Where the spec is genuinely silent on something low-stakes (copy wording, exact layout,
+which Tailwind classes), just make a reasonable choice. Where it's a real open question
+(see "DO NOT GUESS" below), make the same kind of documented placeholder this codebase
+already uses elsewhere (see `prisma/seed-data/README.md` and the "ask Dana" comments) —
+flag it clearly in a code comment and in your final report, then move on. Never block
+the whole run on one unresolved question.
+
+BUILD ORDER
+===========
+
+1. Cycle list screen — `src/app/cycles/page.tsx` (replace placeholder)
+   List all physical ponds (filter out `isVirtualPondType`) with their current cycle status:
+   open (show `priorityCycleCode` + open date) or closed (show last close date / "אין מחזור
+   פעיל"). Link each row to open/manage its cycle.
+   Permission for *viewing this list* is NOT a simple `meetsRequirement()` call — the spec
+   says "ניהול תחום, מנהל צופה, והנהלה" (DOMAIN_MANAGE, VIEW_ONLY, EXECUTIVE) but explicitly
+   excludes OPERATIONS. Write a small inline check: `[AccessLevel.FULL_EDIT,
+   AccessLevel.DOMAIN_MANAGE, AccessLevel.EXECUTIVE, AccessLevel.VIEW_ONLY].includes(level)`.
+
+2. Cycle open / edit screen + API — e.g. `src/app/cycles/[pondId]/page.tsx` + form +
+   `src/app/api/cycles/route.ts` (POST to open, PATCH to edit an open cycle)
+   Fields: `priorityCycleCode` (optional; once set on a cycle it can be changed to another
+   value but never cleared back to empty — enforce server-side), `openedAt` (date, cannot be
+   in the future), `openNotes`.
+   Validate server-side: pond must be physical; pond must not already have another open
+   cycle (`hasOverlappingCycle`); if editing an existing open cycle's `openedAt` to a later
+   date, block if `hasTransfersBefore(cycleId, newDate)` is true (would orphan existing
+   transfer reports). `priorityCycleCode` is `@unique` in the schema — catch the Prisma
+   P2002 error and return a friendly Hebrew message instead of a 500.
+   Permission: `withModuleAccess("תפעול", AccessLevel.EXECUTIVE, ...)` (spec: "רק לבעלי
+   הרשאות ניהול תחום והנהלה" → FULL_EDIT/DOMAIN_MANAGE/EXECUTIVE, i.e. ≤ EXECUTIVE).
+   Audit: `writeAudit({ action: "open_cycle", entityType: "GrowthCycle", ... })`.
+
+3. Cycle close screen + API — e.g. `src/app/cycles/[cycleId]/close/page.tsx` +
+   `src/app/api/cycles/[id]/close/route.ts`
+   Show a live fish-balance preview using `getCycleFishBalance(cycleId)` before the user
+   confirms. If `priorityCycleCode` is still empty, require it now (same uniqueness/no-clear
+   rule as above). Fields: `closedAt` (must be ≥ cycle.openedAt, ≤ now; block if
+   `hasTransfersAfter(cycleId, newClosedAt)` is true), `closeNotes`.
+   Per spec, the ±100 balance check is a **warning, not a hard block** — if
+   `!withinTolerance`, show a clear red/amber message with the actual numbers but still let
+   the user confirm and close. Store the balance snapshot in the audit `after` payload either
+   way.
+   Permission: same EXECUTIVE rule as open. Audit action `"close_cycle"`.
+
+4. Transfers screen — `src/app/transfers/page.tsx` (replace placeholder) + API routes under
+   `src/app/api/transfers/`
+   3-part flow per spec: (a) pick source pond + date → resolve the pond's active
+   `GrowthCycle` automatically (error clearly if none open); (b) pick transfer type — קניה /
+   דילול / פירוק / שיווק are one family on `FishTransferHeader.transferType`, תמותה
+   (mortality) is reported separately even though it's stored the same way; (c) manage
+   `FishTransferDetail` rows under the header (means, strain, count, avg weight, dest pond,
+   time, population code). Header `status` defaults `"טיוטא"` → `"הסתיימה"`; detail `status`
+   defaults `"טיוטא"` → `"סגירה"`. Support saving a draft and resuming it later (don't force
+   a single-shot submit).
+   RBAC ASSUMPTION (flag in a code comment + final report — spec doesn't state this
+   section's level explicitly): default to `AccessLevel.OPERATIONS` (day-to-day data entry
+   fits "תפעול שוטף"). Easy to tighten later once confirmed.
+   Audit: `"create"`/`"update"` on entityType `"FishTransferHeader"`/`"FishTransferDetail"`.
+
+5. Basket-weighing modal (not a standalone page) — triggered only from a דילול/פירוק/שיווק
+   transfer detail row, writes `FishWeighingHeader` (with `transferDetailId` set) +
+   `FishWeighingBasketDetail` rows (`emptyWetWeight`, `weightWithFish`, `fishCount` per
+   basket, unique on `[headerId, basketSeq]`). Compute and display: avg fish weight per
+   basket (`(weightWithFish - emptyWetWeight) / fishCount`) and the weighted total across all
+   baskets in the session.
+   Permission: same OPERATIONS assumption as #4.
+
+6. Field / net weighing screens — `src/app/weighings/page.tsx` (replace placeholder)
+   Two flows under one page (tabs or a type switch is fine): שקילות שטח (routine field
+   sampling, no fixed schedule enforcement needed yet — just record `date`, `pondId`/
+   `cycleId`, `tankId` optional, basket rows same shape as above) and שקילות רשת
+   (net-sampling tied to a transfer, similar shape but `transferDetailId` set, no
+   `tankId`/basket modal — check the schema fields actually present on
+   `FishWeighingHeader`/`FishWeighingBasketDetail` before assuming field names).
+   Permission: OPERATIONS (same assumption, same flag).
+
+CONVENTIONS TO FOLLOW (already established in this codebase — don't deviate)
+=============================================================================
+- API routes: `export const POST = withModuleAccess("תפעול", AccessLevel.X, async (req, { user }) => { ... })`
+  from `src/lib/api-guard.ts`. Never write a route without this wrapper.
+- Validate request bodies with `zod` (see `src/app/api/auth/login/route.ts` for the pattern).
+- Every create/update/delete calls `writeAudit()` from `src/lib/audit.ts`.
+- Pages are server components that call `getCurrentUser()` + `bestAccessForModule()` /
+  `meetsRequirement()` from `src/lib/permissions.ts` for the page-level gate (see
+  `src/components/PlaceholderModulePage.tsx` for the exact pattern); forms/interactive bits
+  are client components.
+- Hebrew RTL UI text matching the spec's terminology exactly (e.g. "פתיחת מחזור גידול",
+  "סגירת מחזור גידול", "מאזן דגים") — don't invent different Hebrew labels.
+- Tailwind, same utility classes already used elsewhere in `src/app` (check an existing page
+  for the color/spacing conventions — `brand-700` etc.).
+
+DO NOT GUESS — flag and use a documented placeholder instead
+==============================================================
+These match already-known open questions in this project (see `prisma/seed-data/README.md`
+and prior code comments) — do not silently resolve them:
+- Delivery notes / shipping screens (driver management, who issues the certificate, pricing
+  ownership) — **out of scope for this run**, do not build them. They depend on unresolved
+  "ask Dana" questions.
+- Orders feature — out of scope, spec itself says "להשלים עם דנה".
+- GrowingThreshold numeric values — not needed for this build, skip.
+
+HARD STOPS — never do these, even if it seems like it would unblock you
+=========================================================================
+- Do not modify `prisma/schema.prisma`. If you find the schema genuinely can't support a
+  screen as specced, stop building that one screen, write down exactly what field/model is
+  missing, and continue with the others — schema changes need a migration against a real
+  Neon production DB, which needs explicit user sign-off first.
+- Do not run `prisma migrate dev`, `migrate deploy`, `migrate reset`, or `db push`.
+- Do not touch `.env`, `prisma/seed-data/workers.local.ts`, or re-run `npm run seed`.
+- Do not remove or weaken any `withModuleAccess()` / permission check.
+- Do not touch the Security section of `CLAUDE.md`.
+
+VERIFICATION BEFORE YOU FINISH
+===============================
+- `npm run build` must pass.
+- `npm run lint` must pass (fix what you introduced).
+- `npm test` must pass — add unit tests for any new pure logic (follow
+  `tests/unit/business-rules.test.ts` conventions) especially around the balance-tolerance
+  warning and the open/close date validation rules.
+- Don't run `npm run test:e2e` unless you also clean up any dev server you start for it.
+
+FINAL REPORT — end with a short summary covering
+====================================================
+- Which of items 1–6 above got fully built vs. partially built vs. skipped, and why.
+- Every RBAC-level assumption you made (flagged above as "ASSUMPTION") — list them again here
+  so they're easy to find.
+- Any schema gaps you hit (per the hard-stop rule) instead of guessing a workaround.
+- Final `npm run build`, `npm run lint`, and `npm test` output (just the pass/fail summary
+  lines, not full logs).

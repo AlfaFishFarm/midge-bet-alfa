@@ -1,0 +1,76 @@
+PRE-GIT SECURITY REVIEW — run this BEFORE every `git init`/first commit and BEFORE every
+`git push`, not just once. This repo has never been pushed anywhere yet (no `.git` exists
+yet as of 2026-06-20) and the live `.env` currently points at the Neon **dev** branch, not
+the production branch — still treat any leaked credential as real and rotate it if found,
+don't downgrade the severity just because it's "only dev."
+
+WHY THIS MATTERS
+=================
+Real worker PII (names/phones/emails for ~19 workers) and real DB credentials exist in this
+project. Once something is pushed to a git remote — even a private one, even if deleted in a
+later commit — it must be treated as compromised: git history keeps it. The check has to
+happen *before* `git push`, not after.
+
+STEP 1 — confirm `.gitignore` actually covers everything secret-bearing
+==========================================================================
+Open `.gitignore` and confirm it excludes, at minimum:
+  - `.env` (real connection strings, JWT_SECRET, ADMIN_SEED_PASSWORD)
+  - `*.db`, `*.db-journal` (old SQLite leftovers, may still have real data in them locally)
+  - `prisma/seed-data/*.local.ts` (real worker PII — `workers.local.ts`)
+  - `node_modules`, `.next`
+If anything is missing, add it and confirm with the user before continuing — don't silently
+expand scope into other cleanup.
+
+STEP 2 — see exactly what WOULD be committed, before adding anything
+========================================================================
+Run `git status` (or `git add -A --dry-run` if `.git` doesn't exist yet, after `git init`)
+and read the full file list. Flag anything that looks like it shouldn't be there: stray
+`.env.local`, `.bak` files, exported `.sql` dumps, screenshots of the Neon/Vercel dashboard,
+etc.
+
+STEP 3 — content scan, not just filename scan
+================================================
+A file can be missing from `.gitignore`'s filename patterns but still contain a secret
+pasted into it directly (e.g. someone pastes a connection string into a comment or a stray
+test file). Run a content grep across everything NOT excluded by `.gitignore` — do not rely
+on `git status` alone:
+
+  grep -RInE \
+    "postgresql://[^\"' ]+|sk-[A-Za-z0-9]{10,}|AKIA[0-9A-Z]{10,}|-----BEGIN|JWT_SECRET\s*=\s*[\"'][A-Za-z0-9+/=]{10,}|ADMIN_SEED_PASSWORD\s*=\s*[\"'][A-Za-z0-9+/=]{6,}" \
+    --exclude-dir=node_modules --exclude-dir=.next --exclude=.env .
+
+The only acceptable hits are the placeholder lines in `.env.example`
+(`postgresql://USER:PASSWORD@HOST/DBNAME...`) — those are templates, not real values. Any
+other hit is a real leak: stop, do not commit, remove the secret, rotate it if it's already
+a real credential (new Neon password / new JWT_SECRET / new ADMIN_SEED_PASSWORD), and only
+then proceed.
+
+STEP 4 — real-PII scan
+========================
+Search tracked-to-be files for the real workers' names/phones (cross-check against
+`prisma/seed-data/workers.local.ts`, which itself must NOT be in the file list from Step 2).
+If any real worker name/phone/email appears in `seed.ts`, a test fixture, a comment, or
+anywhere else outside `workers.local.ts`, stop and fix it the same way the original PII
+relocation was done (move to the `.local.ts` pattern, never inline).
+
+STEP 5 — if `.git` already has history (re-running this later, not first push)
+===================================================================================
+Run the Step 3 grep against history too, not just the working tree:
+  git log -p -S "postgresql://" --all | grep -i "neon.tech"
+If a secret shows up in *any* past commit — even one later "fixed" — it's still compromised.
+Rotate the credential. Don't rely on `git filter-repo`/history rewriting as the fix; rotation
+is the actual fix, history cleanup is just hygiene on top of that.
+
+STEP 6 — final report
+========================
+Give a clear PASS/FAIL, not a vague "looks fine":
+  - Exact file list that would be committed (from Step 2).
+  - Result of the content scan (Step 3) — list every match, even ones you judged as
+    false-positive placeholders, so the user can double-check your judgment.
+  - Result of the PII scan (Step 4).
+  - If `.git` has prior history, result of Step 5.
+  - Explicit confirmation of which Neon branch `.env` currently points to (dev vs.
+    production) so the user knows the actual blast radius if review later turns out wrong.
+
+Do not run the actual `git push` yourself without the user explicitly telling you to, even
+if everything passes — this report is the gate they review first.

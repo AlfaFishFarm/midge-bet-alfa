@@ -1,0 +1,491 @@
+// Prisma schema for Midge Bet Alfa - Operations (תפעול) module
+// Based on: מסמך אפיון מודול תפעול בריכות (3).docx  (v4, 2026-07-11)
+// PostgreSQL (Neon). DATABASE_URL = pooled Neon URL (runtime). DIRECT_URL = unpooled Neon URL (migrations).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ---------- Workers, Roles, Modules, Permissions ----------
+
+model User {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash String
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  worker       Worker?
+  auditLogs    AuditLog[]
+}
+
+// Audit trail: who did what, to which record, and when.
+// Written server-side on every create/update/delete that goes through the app's
+// API routes (not relied upon to be set by the client) - see lib/audit.ts.
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id])
+  username   String   // denormalized snapshot, kept even if the user is later deleted
+  action     String   // "create" | "update" | "delete" | "login" | "login_failed" | "close_cycle" ...
+  entityType String   // e.g. "FishTransferHeader", "GrowthCycle", "Delivery"
+  entityId   String?
+  before     String?  // JSON snapshot of the row before the change (null for create)
+  after      String?  // JSON snapshot of the row after the change (null for delete)
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model Worker {
+  id                 String   @id @default(cuid())
+  firstName          String
+  lastName           String?
+  // For Thai field workers, firstName holds the Hebrew/working nickname (e.g. "וואלן") -
+  // their real legal name lives in latinFirstName/latinLastName, and nickname holds the
+  // short English nickname (e.g. "Valen") used day-to-day. See seed.ts and
+  // workers-sivan.xlsx ("טבלאות מטה דאטה/") for the real source data this maps to.
+  latinFirstName     String?
+  latinLastName      String?
+  nickname           String?
+  language           String?  @default("עברית") // עברית | תאית - drives which UI language a worker sees
+  roleTitle          String?  // free-text real-world job title (e.g. "מנהל תפעול") - distinct from the formal Role model used for RBAC
+  phone              String?
+  phone2             String?
+  email              String?
+  email2             String?
+  priorityEmployeeNo String?
+  userAccountId      String?  @unique
+  user               User?    @relation(fields: [userAccountId], references: [id])
+  active             Boolean  @default(true)
+  hireDate           DateTime?
+  // Spec v4: "עובדים עם הרשאת מנהלים חייבים שתהיה להם חתימה דיגיטלית" (BLOB, optional)
+  digitalSignature   Bytes?
+  workerRoles        WorkerRole[]
+  deliveriesProduced Delivery[] @relation("ProducerWorker")
+  deliveriesManaged  Delivery[] @relation("ManagerWorker")
+}
+
+model Role {
+  id          String       @id @default(cuid())
+  name        String       @unique // e.g. מנהל מדגה, מנהל תפעול, עובד שטח, יועץ, צפייה בלבד
+  workerRoles WorkerRole[]
+}
+
+model AppModule {
+  id          String       @id @default(cuid())
+  name        String       @unique // תפעול, הזנה, בריאות, אדמיניסטרציה...
+  workerRoles WorkerRole[]
+}
+
+model WorkerRole {
+  id          String    @id @default(cuid())
+  workerId    String
+  roleId      String
+  moduleId    String
+  // 1 = full edit, 2 = domain management, 3 = executive view+approve,
+  // 4 = day-to-day operations entry, 5 = view only, 6 = no access.
+  // Lower number = more access. See src/lib/permissions.ts.
+  accessLevel Int       @default(6)
+  worker      Worker    @relation(fields: [workerId], references: [id])
+  role        Role      @relation(fields: [roleId], references: [id])
+  module      AppModule @relation(fields: [moduleId], references: [id])
+
+  @@unique([workerId, roleId, moduleId])
+}
+
+// ---------- Fish & Products ----------
+
+model FishStrain {
+  id           String                @id @default(cuid())
+  latinName    String
+  englishName  String?
+  notes        String?
+  products     Product[]
+  growthParams FishGrowthParameter[]
+  transferDetails FishTransferDetail[]
+  switchedFrom    FishSwitching[]     @relation("SwitchFrom")
+  switchedTo      FishSwitching[]     @relation("SwitchTo")
+}
+
+model Product {
+  id                 String                @id @default(cuid())
+  priorityProductId  String?
+  name               String
+  description        String?
+  active             Boolean               @default(true)
+  marketingStartDate DateTime?
+  fishStrainId       String?
+  fishStrain         FishStrain?           @relation(fields: [fishStrainId], references: [id])
+  growthParams       FishGrowthParameter[]
+  thresholds         GrowingThreshold[]
+}
+
+model FishGrowthParameter {
+  id                            String     @id @default(cuid())
+  fishStrainId                  String
+  productId                     String
+  fishStrain                    FishStrain @relation(fields: [fishStrainId], references: [id])
+  product                       Product    @relation(fields: [productId], references: [id])
+  avgCycleLengthDays             Int?
+  minWaterTemp                  Float?
+  maxWaterTemp                  Float?
+  minOxygen                     Float?
+  maxBiomassDensityKgPerDunam    Float?
+  maxAdultDensityPerDunam        Float?
+  maxFingerlingDensityPerDunam   Float?
+  targetMarketWeightGrams        Float?
+}
+
+model PopulationCode {
+  id    String @id @default(cuid())
+  code  String @unique // אימון-1, אימון-2, פיטום, הקפצת גודל, שמירת חורף, שיווק
+  transferDetails FishTransferDetail[]
+}
+
+// ---------- Ponds, Tanks, Growth Cycles ----------
+
+model PondType {
+  id    String @id @default(cuid())
+  name  String @unique // בריכה רגילה / בריכה גדולה / בור / מחסן שיווק / בריכה וירטואלית לקליטה / בריכה וירטואלית למשלוח
+  ponds Pond[]
+}
+
+model Pond {
+  id           String        @id @default(cuid())
+  name         String
+  code         String?       @unique
+  pondTypeId   String
+  pondType     PondType      @relation(fields: [pondTypeId], references: [id])
+  volume       Float?
+  // Real-world fields from ponds-sivan.xlsx (the farm's actual pond register) -
+  // null where the source file had no value (e.g. delivery pit / main warehouse rows).
+  areaDunam    Float?        // area in dunam (דונם)
+  feeders      Int?          // number of automatic feeders on this pond
+  spreaders    Int?          // number of feed spreaders
+  electricity  Int?          // number of electrical points/circuits
+  oxygenUnits  Int?          // number of oxygen-supply units
+  latitude     Float?
+  longitude    Float?
+  notes        String?
+  growthCycles GrowthCycle[]
+  sourceTransfers FishTransferHeader[] @relation("SourcePond")
+  destTransferDetails FishTransferDetail[] @relation("DestPond")
+  weighings    FishWeighingHeader[]
+}
+
+model Tank {
+  id      String @id @default(cuid())
+  code    String @unique
+  volume  Float
+  notes   String?
+  tankBinds TankBind[]
+  transferMeans TransferMeans[]
+  weighings FishWeighingHeader[]
+}
+
+model GrowthCycle {
+  id                String    @id @default(cuid())
+  priorityCycleCode String?   @unique
+  pondId            String
+  pond              Pond      @relation(fields: [pondId], references: [id])
+  openedAt          DateTime
+  closedAt          DateTime?
+  openNotes         String?
+  closeNotes        String?
+  transfers         FishTransferHeader[]
+  weighings         FishWeighingHeader[]
+
+  @@unique([pondId, openedAt])
+}
+
+// ---------- Transfer means ----------
+
+model TankBind {
+  id              String   @id @default(cuid())
+  dateTime        DateTime
+  tankType        String   // מקומי | חיצוני
+  tankId          String?
+  tank            Tank?    @relation(fields: [tankId], references: [id])
+  externalTankRef String?
+  info            String?
+}
+
+model TransferMeans {
+  id                  String   @id @default(cuid())
+  date                DateTime
+  meansType           String   // פנימי | חיצוני
+  internalTankId      String?
+  internalTank        Tank?    @relation(fields: [internalTankId], references: [id])
+  externalVehicleCode String?
+  transferDetails     FishTransferDetail[]
+}
+
+// ---------- Fish transfers (קניה / דילול / פירוק / שיווק / תמותה) ----------
+
+model Supplier {
+  id              String               @id @default(cuid())
+  name            String               @unique
+  active          Boolean              @default(true)
+  transferHeaders FishTransferHeader[]
+}
+
+model FishTransferHeader {
+  id           String    @id @default(cuid())
+  cycleId      String
+  cycle        GrowthCycle @relation(fields: [cycleId], references: [id])
+  sourcePondId String
+  sourcePond   Pond      @relation("SourcePond", fields: [sourcePondId], references: [id])
+  transferType String    // קניה | דילול | פירוק | שיווק | תמותה
+  transferDate DateTime
+  status       String    @default("טיוטא") // טיוטא | הסתיימה
+  supplierId   String?
+  supplier     Supplier? @relation(fields: [supplierId], references: [id])
+  notes        String?
+  details      FishTransferDetail[]
+
+  @@unique([cycleId, sourcePondId, transferDate, transferType])
+}
+
+model FishTransferDetail {
+  id                String   @id @default(cuid())
+  headerId          String
+  header            FishTransferHeader @relation(fields: [headerId], references: [id])
+  transferMeansId   String?
+  transferMeans     TransferMeans? @relation(fields: [transferMeansId], references: [id])
+  fishStrainId      String
+  fishStrain        FishStrain @relation(fields: [fishStrainId], references: [id])
+  fishCount         Int?
+  avgWeightGrams    Float?
+  // For דילול/פירוק/שיווק: total weight entered manually from tank scale; fishCount is computed display-only.
+  // For קניה: fishCount + avgWeightGrams are manual; totalWeightKg is computed display-only (null in DB).
+  totalWeightKg     Float?
+  destPondId        String
+  destPond          Pond     @relation("DestPond", fields: [destPondId], references: [id])
+  transferTime      DateTime?
+  populationCodeId  String?
+  populationCode    PopulationCode? @relation(fields: [populationCodeId], references: [id])
+  status            String   @default("טיוטא") // טיוטא | סגירה
+  // סיבת תמותה — only for transferType=תמותה rows. Values: מחלה|חנק|טמפרטורה|רעלן|תקיפה|סיבה לא ידועה|אחר
+  causeOfDeath      String?
+  notes             String?
+  weighings         FishWeighingHeader[]
+  switchings        FishSwitching[]
+  deliveryDetails   DeliveryDetail[]
+}
+
+model FishSwitching {
+  id               String             @id @default(cuid())
+  transferDetailId String
+  transferDetail   FishTransferDetail @relation(fields: [transferDetailId], references: [id], onDelete: Cascade)
+  fromStrainId     String
+  fromStrain       FishStrain         @relation("SwitchFrom", fields: [fromStrainId], references: [id])
+  toStrainId       String
+  toStrain         FishStrain         @relation("SwitchTo", fields: [toStrainId], references: [id])
+  createdAt        DateTime           @default(now())
+
+  @@map("fish_switching")
+}
+
+// ---------- Weighings ----------
+
+model WeightType {
+  id   String @id @default(cuid())
+  name String @unique // שקילת ניטור-שטח | שקילת ניטור-רשת | שקילת אפיון טנק
+  weighings FishWeighingHeader[]
+}
+
+model FishWeighingHeader {
+  id                String   @id @default(cuid())
+  date              DateTime
+  staffName         String?
+  weightTypeId      String
+  weightType        WeightType @relation(fields: [weightTypeId], references: [id])
+  tankId            String?
+  tank              Tank?    @relation(fields: [tankId], references: [id])
+  transferDetailId  String?
+  transferDetail    FishTransferDetail? @relation(fields: [transferDetailId], references: [id])
+  pondId            String
+  pond              Pond     @relation(fields: [pondId], references: [id])
+  cycleId           String?
+  cycle             GrowthCycle? @relation(fields: [cycleId], references: [id])
+  notes             String?
+  baskets           FishWeighingBasketDetail[]
+
+  @@unique([date, pondId, tankId])
+}
+
+model FishWeighingBasketDetail {
+  id             String   @id @default(cuid())
+  headerId       String
+  header         FishWeighingHeader @relation(fields: [headerId], references: [id])
+  basketSeq      Int
+  emptyWetWeight Float
+  weightWithFish Float
+  fishCount      Int
+  notes          String?
+
+  @@unique([headerId, basketSeq])
+}
+
+// ---------- Growing stages & thresholds ----------
+
+model GrowingStage {
+  id   String @id @default(cuid())
+  name String @unique // אימון 1, אימון 2, שמירת חורף, פיטום, שיווק, מחסן
+  thresholds GrowingThreshold[]
+}
+
+model GrowingThreshold {
+  id             String @id @default(cuid())
+  productId      String
+  product        Product @relation(fields: [productId], references: [id])
+  growingStageId String
+  growingStage   GrowingStage @relation(fields: [growingStageId], references: [id])
+  notes          String? // threshold values TBD per spec
+
+  @@unique([productId, growingStageId])
+}
+
+// ---------- Clients, Contacts, Carriers, Delivery (שיווק/משלוח) ----------
+// Note: Order model removed — spec v4 + Dean confirmed (2026-07-11) "אין הזמנות".
+
+model Client {
+  id          String    @id @default(cuid())
+  name        String
+  address     String
+  contactInfo String
+  notes       String?
+  contacts    Contact[]
+  carriers    ClientCarrier[]
+  deliveries  Delivery[]
+}
+
+// אנשי קשר של לקוח. Soft-delete only - spec: "במחיקת איש קשר או נהג רק
+// מסמנים את השדה 'פעיל' כ-FALSE - לא לשבש מידע". Never hard-delete; only show
+// active=true rows in lists/dropdowns.
+model Contact {
+  id        String   @id @default(cuid())
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id])
+  name      String
+  phone     String?
+  role      String?  // תפקיד איש הקשר אצל הלקוח
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@index([clientId])
+}
+
+// מובילים/נהגים. A carrier can serve multiple clients (spec: "קישור לנהג שנותן
+// שירות הובלה לכמה לקוחות") - see ClientCarrier join below. Soft-delete only.
+// Spec v4: carrier has licensePlate (רשיון נהיגה) and driverPhone.
+model Carrier {
+  id             String   @id @default(cuid())
+  name           String   // שם המוביל/הנהג
+  licensePlate   String?  @unique
+  vehicleDetails String?
+  driverPhone    String?
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  clients        ClientCarrier[]
+  deliveries     Delivery[]
+}
+
+model ClientCarrier {
+  id        String   @id @default(cuid())
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id])
+  carrierId String
+  carrier   Carrier  @relation(fields: [carrierId], references: [id])
+  notes     String?
+  createdAt DateTime @default(now())
+
+  @@unique([clientId, carrierId])
+}
+
+// Delivery certificate (תעודת משלוח).
+// Spec v4 (2026-07-11): two-step process —
+//   Step 1: fill the spec (anyone: manager or worker) → status "טיוטא"
+//   Step 2: manager signs + generates PDF → status "הופק"
+//   Cancellation (managers only): status "מבוטל" (never hard-delete)
+// No price field — Dean confirmed: "אין מחיר בתעודת משלוח".
+// No orderId — Dean confirmed: "אין הזמנות".
+model Delivery {
+  id               String   @id @default(cuid())
+  clientId         String?
+  client           Client?  @relation(fields: [clientId], references: [id])
+  // לקוח מזדמן — free text name, not stored in clients table (per spec)
+  clientName       String?
+  date             DateTime
+  // שם המבצע - who filled / produced the certificate (worker or manager)
+  producerWorkerId String?
+  producerWorker   Worker?  @relation("ProducerWorker", fields: [producerWorkerId], references: [id])
+  // אחראי - the manager who signs and finalizes the delivery certificate
+  managerId        String?
+  managerWorker    Worker?  @relation("ManagerWorker", fields: [managerId], references: [id])
+  // נהג מהרשימה (linked carrier) — used when driver is a known carrier
+  carrierId        String?
+  carrier          Carrier? @relation(fields: [carrierId], references: [id])
+  // נהג מזדמן (occasional driver) — free text, not stored in carriers table
+  driverName       String?
+  // שעת העמסה — time of loading (HH:MM string, free text)
+  loadingTime      String?
+  // מספר הזמנה [אופציונלי] — per spec Part A
+  orderRef         String?
+  vetApprovalRef   String?
+  notes            String?
+  status           String   @default("טיוטא") // טיוטא | ממתין לאישור | הופק | מבוטל
+  // certNumber: formatted cert ID, e.g. DC-20260620-001 (DC + date + daily seq).
+  // Set by finalize route when status moves to "הופק". Null for drafts/pending.
+  certNumber       String?
+  pdfBlob          Bytes?
+  details          DeliveryDetail[]
+}
+
+// Line items for a delivery certificate.
+// fishTypeDescription: free text snapshot of fish type (spec TBD on FK vs text).
+// transferDetailId: optional link to the שיווק transfer row — used in automatic
+//   mode to auto-populate data from the transfer (Dean confirmed 2026-07-11).
+// sourcePondName: free-text source pond for manual-mode rows (no FK — spec p.31).
+model DeliveryDetail {
+  id                  String   @id @default(cuid())
+  deliveryId          String
+  delivery            Delivery @relation(fields: [deliveryId], references: [id])
+  transferDetailId    String?
+  transferDetail      FishTransferDetail? @relation(fields: [transferDetailId], references: [id])
+  fishTypeDescription String
+  // sourcePondName: free-text in manual mode; auto-filled from AvailableTank in auto mode
+  sourcePondName      String?
+  quantity            Float
+  unit                String?
+  grossNet            String?
+  // No price — Dean confirmed: "אין מחיר בתעודת משלוח" (2026-07-11)
+}
+
+// ---------- Translation ----------
+
+model Translation {
+  id        String @id @default(cuid())
+  listName  String
+  tableName String
+  fk        String
+  langCode  String
+  value     String
+
+  @@unique([tableName, langCode, fk])
+}
+
+// ---------- Fish switching (החלפת דגים) ----------
+// Created when a user selects a fish strain not on the pond's roster
+// and chooses the "החלפת דג" option. Records which strain was swapped out
+// and which one was swapped in. Linked to the transfer detail row that
+// triggered the switch — deleted when that row is deleted (onDelete: Cascade).

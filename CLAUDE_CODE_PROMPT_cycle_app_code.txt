@@ -1,0 +1,128 @@
+GOAL: add a missing display value to growth-cycle screens — "קוד מחזור" / "קוד מזהה מחזור" (the
+app cycle code) — and use it as the PRIMARY way a cycle is identified on screen, instead of
+relying on priorityCycleCode (which can be empty for most of a cycle's life).
+
+SOURCE OF TRUTH FOR THIS PROMPT — READ THIS FIRST
+======================================================================
+There are now three documents describing this. They disagree on details. In order of authority,
+newest/most authoritative wins:
+1. "מסמך אפיון מודול תפעול בריכות.pdf" (workspace root) — newest file, added 2026-06-20, AFTER
+   the HTML prototype. This is a PDF export that includes explicit handwritten correction notes
+   tied to screenshots (e.g. "הערות בנוגע לתמונה שלעיל" = "notes about the image above" — meaning
+   the author is correcting/clarifying their own mockup screenshots). THIS DOCUMENT WINS whenever
+   it conflicts with the other two. Use python-docx is not needed here since this is a PDF —
+   if you need to re-extract it, use pypdf (`pip install pypdf --break-system-packages`) and
+   call `.extract_text()` per page; page 5-6 and 8-9 cover cycle open/close, pages 14-26 cover
+   transfers and weighings.
+2. "fish-farm-manager-v11.html" (workspace root) — interactive prototype, previously treated as
+   authoritative, but is now SUPERSEDED on this specific point by the PDF above (see "WHAT
+   CHANGED" below). Still useful for general screen layout/flow where the PDF doesn't contradict
+   it.
+3. "מסמך אפיון מודול תפעול בריכות.docx" — older Word doc, same content as the PDF's earlier
+   sections but the PDF is the more complete/current export. Prefer the PDF.
+
+WHAT CHANGED vs. the previous version of this prompt (if Claude Code already acted on an earlier
+draft, re-check against this corrected version):
+- The app cycle code does NOT include time-of-day. Format is pond-code + "-" + YYYYMMDD only
+  (date, no hours/minutes). Confirmed explicitly in the PDF with a worked example: "קוד מזהה
+  מחזור אינו כולל שעה. אמור להיות P100-20260606 (אם פתיחת הבריכה P100 בוצעה בתאריך 6-יוני-2026)".
+  This contradicts the HTML prototype's buildAppCycleId(), which appended HH:mm — that prototype
+  behavior is WRONG per the newer spec; do not port it.
+- The app cycle code must NOT be stored as a column in the database. The PDF is explicit: "זה
+  ערך מוצג בלבד. אין צורך לשמור בטבלה - מכיוון שממילא קוד בריכה ותאריך הם אינדקס חיפוש חד חד
+  ערכי. אין צורך לתחזק כפילות של מידע." (= "this is a display-only value. No need to persist it
+  in a table, since pond-code + date is already a unique lookup index. No need to maintain
+  duplicate data.") So: compute it on the fly, everywhere it's displayed, from pond.code +
+  cycle.openedAt — do NOT add a schema column, do NOT add a migration, do NOT make it @unique in
+  Prisma.
+- This is the field that should replace priorityCycleCode as the PRIMARY thing shown in transfer
+  and weighing screens. The PDF repeatedly corrects mockup screenshots that show "מחזור פריוריטי"
+  in the transfer header with the note: "(במקום 'מחזור פריוריטי' צריך להיות 'קוד מחזור' - ההלחם
+  של קוד בריכה עם תאריך.)" — i.e. wherever a transfer or weighing screen shows a cycle identifier
+  near the pond/date selection, it must show the computed app cycle code, not the Priority ERP
+  code. This appears identically for purchase (קניה), dilution (דילול), splitting (פירוק), and
+  marketing (שיווק) transfer screens, and for the weighing entry screen (page 24: "מחזור הגידול
+  הרלוונטי נשלף ומוצג בתיבה 'קוד מחזור גידול' (קריאה בלבד)").
+- priorityCycleCode itself is unaffected — still optional at open, required at close, unique,
+  never clearable once set. That logic in the live app is already correct, per both the docx and
+  this PDF (pages 5-6, 8-9). Don't change it. It should now appear as a SECONDARY value, not the
+  primary identifier, in screens that previously showed only it.
+
+WHAT TO BUILD IN THE LIVE APP
+================================
+1. Add a small shared helper, e.g. src/lib/cycles.ts (check if this file already exists —
+   isVirtualPondType lives there per page.tsx imports — add alongside it):
+     export function appCycleCode(pondCode: string, openedAt: Date): string {
+       const pad = (n: number) => String(n).padStart(2, "0");
+       return `${pondCode}-${openedAt.getFullYear()}${pad(openedAt.getMonth() + 1)}${pad(openedAt.getDate())}`;
+     }
+   No time component. No DB persistence. Pure function, called wherever a cycle needs to be
+   displayed, given the pond's code and the cycle's openedAt (already loaded via the existing
+   `pond` / `cycle.pond` relations in most of these screens — check each call site for whether
+   pond.code is already in scope, and add it to the Prisma `select`/`include` if not).
+
+2. Do NOT modify prisma/schema.prisma for this. No new column, no migration. (If a previous
+   attempt at this task already added an `appCycleId` column/migration, revert that — it's not
+   what the current spec wants.)
+
+3. cycles/[pondId]/CycleForm.tsx (open/update screen) and cycles/[pondId]/page.tsx:
+   - Show the computed code read-only, label "קוד מחזור" (or "קוד מזהה מחזור" — match whichever
+     label this screen already uses nearby; the PDF uses both terms for the same thing). Format:
+     pond.code + "-" + YYYYMMDD of the relevant date (today's date when opening a new cycle;
+     openedAt when editing an existing one). Recompute live in the open form if the date field
+     changes (client-side preview is fine, e.g. via a small client component or just deriving it
+     in render from the date input's current value) — but again, nothing is persisted.
+   - Keep priorityCycleCode field as-is (already correct), just no longer the only identifier
+     shown in the "מחזור פתוח" banner at line ~70 of page.tsx — show the app cycle code first,
+     priorityCycleCode appended after if present:
+     `{appCycleCode(pond.code, openCycle.openedAt)}{openCycle.priorityCycleCode ? ` · ${openCycle.priorityCycleCode}` : ""}`
+
+4. Close screen (cycles/[pondId]/close, whatever the close form component is called) — same
+   treatment: show the computed app cycle code read-only (derived from the existing openedAt,
+   not editable), priorityCycleCode shown/required as already implemented.
+
+5. Transfers — this is the main correction. In whatever component renders the top
+   "פרטי בריכה ותאריך" section of a transfer (new transfer form, and the read-only header on
+   transfers/[id]), the box currently labeled/showing priorityCycleCode-related info must show
+   the app cycle code as the primary cycle identifier:
+   - src/app/transfers/new/NewTransferForm.tsx — once a pond + date resolve to an open
+     GrowthCycle, show "קוד מחזור" = appCycleCode(pond.code, cycle.openedAt) next to the pond
+     selection, read-only. This applies identically across קניה/דילול/פירוק/שיווק.
+   - src/app/transfers/[id]/page.tsx and TransferDetailManager.tsx — same, in the header area
+     that currently shows cycle/priority info.
+   - src/app/transfers/page.tsx (list) — if a cycle column/identifier is shown per row, prefer
+     the app cycle code there too.
+
+6. Weighings:
+   - src/app/weighings/page.tsx + WeighingsClient.tsx — same swap: show appCycleCode as primary.
+   - If a standalone "+ הוסף שקילה" flow exists or is being built (see
+     CLAUDE_CODE_PROMPT_weighing_fixes.txt, a separate prompt) — once pond + date resolve to an
+     open cycle, show "קוד מחזור גידול" read-only next to the pond/date fields, per PDF page 24.
+   - src/app/api/weighings/route.ts and [id]/route.ts — make sure pond.code is included in
+     whatever `select`/`include` already pulls the cycle relation, so the frontend can compute
+     the display value without an extra round trip.
+
+7. Do not touch src/app/api/transfers/route.ts's cycle-open enforcement logic (422 if no open
+   cycle) — unrelated to this display change, already correct.
+
+GUARDRAILS
+============
+- Don't add any new database column or migration for this — it's a pure display computation.
+- Don't change priorityCycleCode's existing validation rules.
+- Don't build the HTML prototype's dashboard notification system (warning toast for cycles
+  missing a Priority code) in this pass — separate, larger feature, not requested yet.
+- If you already ran an earlier version of this prompt that added a schema column named
+  appCycleId, undo that (drop the column/migration) before proceeding — the corrected spec
+  explicitly forbids persisting this value.
+
+VERIFY BEFORE REPORTING DONE
+================================
+1. Open a new growth cycle on a pond with a known code (e.g. "P100") today — confirm the
+   displayed code is exactly "{code}-{YYYYMMDD}" with no time component, e.g. "P100-20260620".
+2. Confirm no new column was added to GrowthCycle in schema.prisma (diff schema.prisma against
+   git history if unsure).
+3. Confirm the app cycle code (not "—", not the Priority code) now shows as the primary cycle
+   reference on: /cycles/[pondId], the transfer new-form and detail pages for all four transfer
+   types, and /weighings — even when priorityCycleCode is empty.
+4. Confirm priorityCycleCode still displays as a secondary value where present, and that closing
+   a cycle still blocks without it (unchanged behavior).

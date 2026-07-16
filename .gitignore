@@ -1,0 +1,12 @@
+node_modules
+.next
+.env
+*.db
+*.db-journal
+.DS_Store
+
+# Real worker PII (names/phones/emails) - see prisma/seed-data/README.md
+prisma/seed-data/*.local.ts
+
+# Build artifacts
+tsconfig.tsbuildinfo

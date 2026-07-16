@@ -1,0 +1,229 @@
+GOAL: Dean's instruction (2026-06-21): "הכל הכל הכל צריך שיהיה בול כמו באיפיון" — everything,
+everything, everything must match the spec EXACTLY. This prompt consolidates every functional AND
+visual gap found by re-reading "מסמך אפיון מודול תפעול בריכות.pdf" (31 pages, workspace root) —
+both its TEXT (PyMuPDF text extraction) and its embedded SCREEN MOCKUP IMAGES (rendered at 150dpi
+and viewed directly) — cross-checked against the live code as of 2026-06-21.
+
+Before starting: read the "Status / open handoffs" section at the top of CLAUDE.md. After
+finishing each section below, move this file into a `done/` folder (create it if missing) and
+update that CLAUDE.md table — don't leave completion status to be guessed from file timestamps.
+
+This supersedes the open items in CLAUDE_CODE_PROMPT_weighing_fixes.txt and
+CLAUDE_CODE_PROMPT_save_confirmation.txt if those overlap — re-verify current code state before
+assuming either is still needed, both have not been reverified recently.
+
+================================================================================
+PART 1 — BOUNDED FIXES TO EXISTING SCREENS (do these; well-defined, no scope decision needed)
+================================================================================
+
+SECTION A — Transfers: weight-entry model inversion for דילול/פירוק/שיווק (HIGHEST PRIORITY —
+data integrity, feeds מאזן מסה/inventory)
+
+Spec page 18 (exact, paraphrased from mockup + text): for דילול/פירוק/שיווק, the field flow is the
+OPPOSITE of קניה:
+  - משקל ממוצע (גרם) → READ-ONLY, must equal the average computed from that row's basket-weighing
+    session (BasketWeighingModal). Page 21 confirms: "המשקל הממוצע יישמר ברשומת שקילת הטנק (ראה
+    מסכי שקילות)".
+  - משקל כולל (ק"ג) → MANUAL entry (from the tank scale) — this is the field the user actually
+    types into for these 3 types.
+  - מספר דגים → COMPUTED = round(משקל כולל * 1000 / משקל ממוצע). NOT manually entered.
+  - קניה stays as currently implemented: fishCount + avgWeightGrams are the manual inputs (from
+    the supplier's report), total weight is the only computed field.
+
+Current state (confirmed by reading the code 2026-06-21):
+  - `src/app/api/transfers/[id]/details/[detailId]/route.ts` `patchDetailSchema` allows free-form
+    editing of `avgWeightGrams`/`fishCount` for every transfer type uniformly — no per-type branch.
+  - `prisma/schema.prisma` `FishTransferDetail` has no `totalWeightKg` field at all.
+  - `src/app/transfers/[id]/BasketWeighingModal.tsx` computes `overallAvg`/`totalNet`/`totalFish`
+    per weighing session but never PATCHes them back to the parent `FishTransferDetail` row — so
+    even if avg weight were made read-only, nothing currently populates it from basket weighing.
+
+Required changes:
+  1. Add `totalWeightKg Float?` to `FishTransferDetail` (migration).
+  2. In `src/app/transfers/[id]/BasketWeighingModal.tsx`, after a weighing session is saved, PATCH
+     the parent detail row's `avgWeightGrams` with the session's computed average (and consider
+     whether fishCount/totalWeightKg should also sync at that point, vs. staying purely
+     user-entered on the detail row — match the spec's "see weighing screens" wording: avg weight
+     is the ONLY field driven by basket weighing; total weight is a separate manual tank-scale
+     entry).
+  3. In the transfer detail row UI (`TransferDetailManager.tsx`) and its PATCH validation
+     (`route.ts` above), branch on `header.transferType`:
+     - קניה: fishCount + avgWeightGrams editable, totalWeightKg computed+displayed, read-only.
+     - דילול/פירוק/שיווק: totalWeightKg editable, avgWeightGrams read-only (sourced from basket
+       weighing; show "—" or a "טרם נשקל" placeholder until a weighing exists for that row),
+       fishCount computed+displayed, read-only.
+     - תמותה: see Section E — gets its own screen, same weight-model as דילול per spec page 19's
+       mockup (avg weight + fish count both shown per row, total weight computed — re-check the
+       page 19 mockup columns when implementing: סוג דג / משקל ממוצע (גרם) / מספר דגים / משקל כולל
+       (ק"ג) / שעת ההרשמה / סיבת תמותה — closer to קניה's input pattern than דילול's, confirm
+       against the mockup, don't assume).
+  4. Server-side: reject PATCHes that try to set a read-only field for that transfer type (don't
+     rely on UI disabling alone — same principle as the existing RBAC pattern in this codebase).
+
+SECTION B — Transfers: tank summary bar (פס סיכום טנקים)
+
+Spec page 15 mockup shows a persistent bottom summary bar on the transfer detail screen with two
+values — total fish count and total weight (קק"ג, "מאזן קק"ג" per the תמותה mockup on page 19) —
+sitting directly above the two save buttons ("שמור כטיוטה" / "סכם העברה"). Confirmed via the page
+19 mockup image: dark navy bar with "מאזן קק"ג: 0" on one side and "טנקים: 0" on the other,
+directly above the save-buttons row. Currently `TransferDetailManager.tsx` has the two save buttons
+at the top only — no summary bar exists anywhere on the screen. Add it, computed from the current
+open+closed detail rows (sum of totalWeightKg, count of rows or distinct tanks — confirm which the
+mockup means by "טנקים" before implementing; it reads as a row/tank count, not fish count).
+
+SECTION C — Transfers: transfer-type chip colors
+
+Spec page 15 and page 19 mockups both show the 5 transfer-type buttons in 5 DISTINCT colors (not
+one brand color): קניה = teal/cyan, דילול = blue, פירוק = purple/violet, שיווק = orange, תמותה =
+red. Currently `NewTransferForm.tsx` renders all 5 as identical gray/brand-colored pills that only
+differ when selected. Restyle to match the 5-color scheme from the mockups (use the existing
+Tailwind palette — pick the closest of red/orange/purple/blue/teal-500/600 shades already used
+elsewhere in the app, e.g. CloseForm.tsx's blue/red usage, for consistency rather than introducing
+brand-new hex values).
+
+SECTION D — Transfers: smaller wording/behavior fixes (page 14-18 text)
+
+  - Default `meansType` per transfer type on a new detail row: קניה → "חיצוני", דילול/פירוק/שיווק
+    → "פנימי" (currently always blank, user must pick every time).
+  - "סגירת טנק" button: disable it until all 5 required fields on that row are filled, instead of
+    enabling it and showing an error toast after a failed click.
+  - Column header wording: "שלב" → "שלב באיכלוס"; the tank-code-only column → "מזהה רכב" (page 16
+    mockup column order: סוג דג, בריכת יעד, שלב באיכלוס, מספר דגים, משקל ממוצע, משקל כולל, שעת
+    ההעברה, אמצעי העברה, מזהה רכב, שקילת סלים, סגירה, מחיקה — match this order); "אמצעי" label →
+    "אמצעי העברה".
+  - `/transfers/new`: when the user re-selects a pond+date combination that already has an open
+    draft, redirect to that existing draft proactively (client-side, before submit) instead of
+    relying solely on the server's existing P2002-conflict fallback (`src/app/api/transfers/
+    route.ts` already returns the existing draft on conflict — this is just adding a same-page
+    pre-check using the already-loaded `existingDrafts` list).
+
+SECTION E — Mortality (תמותה): dedicated screen, not a transfer-type chip
+
+Spec page 19 explicitly: "דיווח תמותה אינו העברה" (mortality reporting is NOT a transfer) — and
+shows (highlighted green "מסכים חדשים" = new screens) its OWN distinct mockup, structurally
+different from the generic transfer table:
+  - Header: תאריך / קוד בריכה (auto) / מחזור פריוריטי (auto) — same key-resolution pattern as
+    other transfers (pond+date → open GrowthCycle, error if none).
+  - A single table "שקילת טנקים" with columns: סוג דג, משקל ממוצע (גרם), מספר דגים, משקל כולל
+    (ק"ג), שעת ההרשמה, סיבת תמותה (dropdown), סניכת תמותה [sic — likely "סיבת תמותה" duplicated or
+    a second free-text field, re-read the mockup carefully when implementing], מחיקה (delete row).
+  - "+ הוסף רשומת תמותה" button to add rows (not "+ שקילת טנקים" — different label from the
+    regular transfer screen).
+  - "הערות חופשיות על אירוע התמותה" free-text textarea below the table.
+  - Same green "טנקים סגורים" section + dark summary bar + "שמור כטיוטה"/"סכם העברה" buttons as
+    other transfer types.
+  - Remove תמותה from `TRANSFER_TYPES` in `NewTransferForm.tsx`'s chip list; give it its own entry
+    point (e.g. a "דיווח תמותה" button/nav item) routing to a dedicated screen/component, while
+    still backed by the same `FishTransferHeader`/`Detail` tables if that's the simplest schema fit
+    (transferType="תמותה" already exists as a valid value server-side) — the spec's objection is to
+    the USER-FACING framing as a "transfer choice", not necessarily to the underlying data model.
+
+SECTION F — Basket weighing modal: minor mockup-vs-live checks
+
+Page 20-23 mockups confirm the modal's date/time field should show a FIXED date with an EDITABLE
+time ("התאריך קבוע והשעה ניתנת לעריכה" — red emphasis in the spec, meaning this was a previously
+missed requirement) — verify `BasketWeighingModal.tsx`'s date/time inputs match this (date locked
+to the transfer date, only time editable), not freely editable both. Also: tank-type dropdown
+(D6/X-1 style codes in the mockup) must prevent selecting the same tank twice in one session (page
+20 text: "בדיקה: יש למנוע בחירת אותו טנק פעמיים") — check this validation exists.
+
+SECTION G — Field/net weighing screens (שקילות שטח / שקילות רשת): missing creation UI
+
+`src/app/weighings/page.tsx` + `WeighingsClient.tsx` currently render a READ-ONLY history list
+only (two tabs, expandable rows) — there is no way to create a new standalone field/net weighing
+from the UI, even though the API already supports it fully (`POST /api/weighings` accepts pondId +
+weightTypeId + optional cycleId/tankId/staffName/notes with no transferDetailId required — see
+`src/app/api/weighings/route.ts`). Spec pages 24-26 mockups show a dedicated creation flow: pond
+search/select (with a "ללא תחזיר" / no-active-cycle badge per pond in the dropdown per the page 24
+mockup), then a basket-entry table (per-basket משקל ריק / משקל עם דגים / מספר דגים, computed net +
+average), then a save confirmation summary screen (page 27 mockup shows this exact pattern: ✓
+header, summary fields, totals, "שמור שקילה" button). Build a "שקילה חדשה" entry point on
+`/weighings` (or its own route) reusing `BasketWeighingModal.tsx`'s basket-row UI pattern where
+practical rather than duplicating it from scratch.
+
+================================================================================
+PART 2 — LARGE NET-NEW SCREENS / REDESIGNS (confirm scope & order with Dean before starting any
+of these — each is a substantial build, not a fix; don't silently sequence all four in one pass)
+================================================================================
+
+SECTION H — Navigation & dashboard redesign (spec pages 1-3)
+
+The live `src/components/AppShell.tsx` + `src/lib/nav-config.ts` is a generic flat white
+sidebar (desktop) / bottom-tab bar (mobile) listing individual feature pages. The spec mockups
+(pages 2-3) show a completely different, two-tier structure:
+  - A persistent dark-green TOP STATUS BAR: logo/app-name top-left, live date+time centered,
+    user name + weather icon + home icon + back-arrow + hamburger menu top-right (page 1 text: "ה
+    status bar יוצג בראש כל המסכים", and it's translatable but defaults Hebrew).
+  - A MAIN MENU screen reached via the hamburger: 7 colored pill-style buttons, one per module —
+    תפעול (green), הזנה (orange), בריאות (red), תחזוקה (yellow), אדמיניסטרציה (purple), דשבורד
+    (blue), סיכום נתונים (teal) — page 4 mockup. Buttons are grayed/disabled (not hidden) for
+    modules the worker's RBAC doesn't grant (page 5: "כפתורים מופעלים וזמינים, בהתאם להרשאות הגישה
+    של המשתמש... עבור עובד שאין לו הרשאות אדמיניסטרציה - עבורו כפתור האדמיניסטרציה יהיה לא פעיל
+    (אפור)").
+  - Each module pill opens its OWN colored sub-menu screen (page 5 mockup: תפעול's submenu has 4
+    pills — ניהול תפעול / העברות / שקילות / טיפולים).
+  - A separate דשבורד (dashboard) screen exists too (page 29 mockup, green-bordered): header bar +
+    "חישנים" (sensors/alerts) action button row (לוח שנה / מצב נוכחי / סיכום יומי / חישנים), then
+    two side-by-side panel cards ("בריכות אדומות" / red-flagged ponds, and "הודעות ועדכונים" /
+    notifications) — both currently showing empty-state checkmarks in the mockup.
+
+This is a foundational redesign affecting routing structure, not just colors — recommend agreeing
+with Dean on whether to do it in one pass (full 2-tier nav + dashboard) or incrementally (colors/
+pills first as a visual-only pass on the existing flat nav, restructure into 2-tier later).
+
+SECTION I — Clients & delivery certificates (תעודת משלוח) — spec pages 11-14, currently a bare
+placeholder (`src/app/clients/page.tsx` → `PlaceholderModulePage`, no real implementation at all)
+
+Spec requires: client CRUD (חלק א: select existing or add new client; חלק ב: add new client with
+name, address, multiple contacts with phone1/phone2/email/title, and multiple vehicles each with
+driver name + plate number; חלק ג: edit an existing client's name/address/contact/vehicle); and a
+delivery-certificate document (page 14 mockup: branded header with farm logo + company info +
+cert number + date/time, client details, shipped-items table — מספר טנק/סוג דג/בריכת מקור/משקל
+(ק"ג) — totals row, and carrier details — שם הנהג/מספר רישוי/מספר רישיון) generated from a
+transfer's data and linked back to the customer record (spec: "כדאי שבתעודת המשלוח יהיה קישור
+למזהה של ההזמנה מהלקוח"). This needs a `Client`/`ClientContact`/`ClientVehicle` schema addition
+(none of these models exist in `prisma/schema.prisma` currently) plus a PDF/print-style certificate
+view. Large, well-scoped feature — confirm priority with Dean before starting (it depends on
+whether שיווק transfers should link to a client per row, which also touches Section A/E's data
+model).
+
+SECTION J — Daily summary / current status / calendar screens — spec pages 29-31, NOT built at all
+(no corresponding route exists anywhere in `src/app/`)
+
+  - סיכום יומי (page 29-30 mockup): date-filterable summary across every operational category for
+    that day — העברות, שקילות, פתיחות/סגירות בריכות, טיפולים, בדיקות מים, בדיקות דגים, נתונים
+    חריגים — each as its own collapsible section showing "אין פעולות X להיום" when empty.
+  - מצב נוכחי (page 31 mockup, partially visible): appears to be a live grid/table view, possibly
+    per-pond or per-day status (the rendered mockup is a small data table — re-examine page 31's
+    full image carefully before implementing, the captured render was partially cut off).
+  - לוח שנה (page 31, marked optional in the spec's own page-overview) — a calendar log view.
+
+These read mostly from data that already exists (transfers, weighings, cycles) — implementation is
+plausible without new schema, but it's still a multi-screen build. Confirm with Dean whether all
+three ship together or daily-summary first (it's referenced most directly elsewhere in the spec).
+
+SECTION K — User registration screen (spec page 28) — currently a bare placeholder
+(`src/app/admin/users/page.tsx` → `PlaceholderModulePage`)
+
+Smaller, well-bounded relative to H/I/J: a form to create a new Worker + linked User account with
+role/module/access-level assignment, reusing the existing `Worker`/`User`/`WorkerRole` schema
+(no migration needed — schema already supports this fully per `prisma/schema.prisma`). Re-read
+page 28's mockup/text in full before implementing (it was only partially captured in this review
+pass — confirm exact required fields against the live image, don't assume parity with the seed
+script's worker fields).
+
+================================================================================
+OPEN QUESTIONS FOR DEAN (don't silently decide these — ask, per his standing "ask when unclear"
+preference)
+================================================================================
+
+1. PopulationCode naming: the live seed (`prisma/seed.ts` `populationCodeNames`) has
+   אימון-1/אימון-2/פיטום/הקפצת גודל/שמירת חורף/שיווק — the spec's קניה-specific list (pages 16-17)
+   is הטלה/אימון/אימון ראשון/אימון שני/פיטום/מחסן/שמירת חורף/דגים מהים/היפוך מין. These don't
+   overlap cleanly. Changing seed data affects any rows already using the current codes — confirm
+   with Dean whether to rename/replace the list (and migrate existing data) or keep both sets.
+2. `PondType.isConcrete` boolean field: the SQL reference file has this column; the live schema
+   achieves the same practical filtering today via a pond-type-name exclusion list in
+   `src/app/transfers/[id]/page.tsx`. Adding the real boolean is schema parity with the SQL
+   reference but not functionally required right now — confirm whether it's worth the migration.
+3. Part 2 sections (H/I/J/K): confirm build order — see notes in each section above.

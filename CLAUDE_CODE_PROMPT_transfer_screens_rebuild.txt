@@ -1,0 +1,282 @@
+GOAL: the live transfer screens (NewTransferForm.tsx + TransferDetailManager.tsx) do not match
+the spec's required structure at all — this is a structural rebuild, not a styling tweak. Source:
+"מסמך אפיון מודול תפעול בריכות.pdf" (workspace root). Quotes below are exact, extracted with
+PyMuPDF text extraction (`pip install pymupdf --break-system-packages` then
+`fitz.open(path)[i].get_text()`), page numbers are 1-indexed PDF pages.
+
+This prompt also fixes two unrelated, already-confirmed spec gaps discovered while reviewing the
+same files (RBAC viewer-read bug, CloseForm color scheme) — see sections C and D. Do all sections;
+they touch overlapping files.
+
+================================================================================
+SECTION A — three-part structure for all transfer screens (pages 14-19)
+================================================================================
+
+Exact quote (page 14): "מסכי ההעברות מחולקים ל-3 חלקים. החלק הראשון: פרטי הבריכה שממנה מעבירים
+דגים + תאריך. ביחד הם מהווים מפתח לאיתור מחזור גידול. (אם אין מחזור גידול פתוח באותה בריכה ובאותו
+תאריך- יש להוציא הודעת שגיאה ולמנוע המשך דיווח)"
+
+Exact quote (page 15): "החלק השני: פרטי מכלי ההעברה / טנקים- בעריכה. החלק השלישי: טנקים שנסגרו."
+
+So every transfer screen (all 5 types: קניה, דילול, פירוק, שיווק, תמותה) is divided into:
+  - Part A (header): source pond + date → resolves to one GrowthCycle. Show the computed app
+    cycle code (date-only format, see CLAUDE_CODE_PROMPT_cycle_app_code.txt — if that prompt has
+    already been run, reuse its `computeCycleCode` helper; if not, write the same
+    `{pondCode}-{YYYYMMDD}` helper here rather than duplicating logic). If no open GrowthCycle
+    exists for that pond+date, show a blocking error and prevent any further entry in Part B/C.
+  - Part B: "טנקים בעריכה" (tank rows currently being edited) — a table of FishTransferDetail rows
+    with status = "טיוטא".
+  - Part C: "טנקים שנסגרו" (closed tank rows) — a SEPARATE table, below Part B, of
+    FishTransferDetail rows with status = "סגירה". A row moves from B to C via the "סגירת טנק"
+    button (see below), never the reverse in the UI (no "reopen" button is specified).
+
+NOTE: the schema and API already fully support this — `FishTransferDetail.status` is already
+`"טיוטא" | "סגירה"` (prisma/schema.prisma line ~258), and PATCH
+/api/transfers/[id]/details/[detailId] already accepts `status` in its body
+(src/app/api/transfers/[id]/details/[detailId]/route.ts). This is a pure frontend gap — no new
+status field or migration needed for the open/closed split itself. (Section B below does need one
+small schema addition for Supplier — see B6.)
+
+Part B/C field requirements, per quotes on pages 16-18 (note differences by transfer type):
+
+  B1. Common fields, every type:
+      - "סוג דג" → fishStrainId (exists, already wired)
+      - "משקל ממוצע (גרם)" → avgWeightGrams (exists, already wired)
+      - "מספר דגים" → fishCount (exists, already wired)
+      - "משקל כולל (ק"ג)" → NEW computed display-only field = avgWeightGrams * fishCount / 1000,
+        shown in the row but never sent to the API (purely derived, matches spec: "משקל כולל
+        (ק"ג): מחושב כמכפלה של משקל ממוצע במספר דגים")
+      - "שעת ההעברה" → transferTime (exists, already wired) — quote page 18: "ברירת מחדל מהשעון
+        של המחשב, אך עם אפשרות לעדכון ידני" — default to current time, editable.
+      - "בריכת יעד" → destPondId (exists, already wired) — quote: must be a concrete pond (not
+        virtual, not a בור), and only ponds that are currently open (have an open GrowthCycle).
+        Filter the `allPonds` list passed into the component accordingly (the page.tsx loader
+        needs to pass only open, concrete ponds — check current loader and adjust query).
+      - "שלב באיכלוס" → populationCodeId (exists, already wired, labeled "קוד אוכלוסייה" in the
+        UI today — relabel to "שלב באיכלוס" to match spec wording). For שיווק type specifically,
+        quote page 18: "שלב באיכלוס חייב להיות שיווק ללא אפשרות עריכה" — when transferType ===
+        "שיווק", auto-set this to the PopulationCode row whose code is "שיווק" and disable the
+        select.
+      - "אמצעי העברה" (transfer means) → NEW field, wired to the EXISTING TransferMeans model
+        (prisma/schema.prisma, already has meansType "פנימי"|"חיצוני", internalTankId,
+        externalVehicleCode) via `transferMeansId` on FishTransferDetail (already exists, already
+        accepted by both POST and PATCH detail routes — purely a missing UI control today). Build
+        as: a toggle/select "פנימי"/"חיצוני", and:
+          - if פנימי → "מזהה רכב" is a select from the Tank list (internalTankId)
+          - if חיצוני → "מזהה רכב" is free text (externalVehicleCode)
+        Default per type (quotes pages 16-17): קניה defaults to חיצוני; דילול/פירוק/שיווק default
+        to פנימי. The component needs to create a TransferMeans row (or reuse one) when the row is
+        added/edited, then set transferMeansId on the detail — check whether a TransferMeans
+        record should be 1:1 per detail row (simplest: create one each time, no need to dedupe).
+      - כפתור מחיקת שורה — already exists, keep.
+      - כפתור "סגירת טנק" (close-tank button) → NEW. Quote (page 17): "כפתור סגירה טנק: מסמן את
+        הרשומה כ'סגורה זמנית'. הרשומה מוסרת מהחלק השני ומוצגת בחלק השלישי... ניתן להעביר רשומות
+        למצב סגירת טנק רק אחרי שכל פרטי הטנק מולאו." Disable this button until fishStrainId,
+        destPondId, fishCount, avgWeightGrams, and transferMeansId are all filled on that row.
+        On click: PATCH the detail with `{ status: "סגירה" }`, then move the row from the Part B
+        table to the Part C table in local state (matches existing optimistic-update pattern
+        already used elsewhere in this file).
+
+  B2. שקילה (weighing) trigger: keep the existing "+ שקול" / "עריכת שקילה" button, restricted to
+      WEIGHABLE_TYPES (already correct: דילול/פירוק/שיווק).
+
+  B3. Purchase (קניה) — has a DIFFERENT header shape, quotes page 16:
+      - "בריכת שלייה: אין צורך... אם יש רק מחסן ראשי. ממילא זו בריכה וירטואלית ולא ממשית" — for
+        קניה, auto-set the source pond to the existing "Main" / "מחסן ראשי" pond
+        (pondType "מחסן שיווק", seeded in prisma/seed.ts) and hide the pond picker entirely in
+        Part A when transferType is קניה.
+      - "שם ספק- בחירה מתוך רשימת ספקים" — NEW field, header-level (one per transfer, not per
+        row). There is currently NO Supplier model in the schema — add one (see B6) and a nullable
+        `supplierId` on FishTransferHeader, required only when transferType === "קניה".
+      - Default אמצעי העברה for קניה is חיצוני (טנק חיצוני / משאית המשווק), per quote.
+
+  B4. דילול / פירוק — share one UI (quote page 17: "להעברת דילול והעברת פירוק יש אותו ממשק").
+      - "בריכת שלייה: רק בריכות ממשיות" (must be a real, non-virtual pond, already true via the
+        normal pond list).
+      - Extra validation, quote page 18: "סוג דג רשימה של הדגים. וליד כל דג האם אמור להיות
+        בבריכה. יש אפשרות לבחור גם דג שלא נמצא ברשימת הדגים בבריכה. ואז באישור- תצא התראה עם בקשת
+        אישור." Implementation: when the chosen fishStrainId is NOT one of the fish strains
+        already recorded as present in the source pond's current cycle (derive this from existing
+        transfer/weighing history for that cycle if such a lookup exists; if not, skip the
+        "expected in pond" cross-check for now and just implement the confirm-on-mismatch flow as
+        a plain confirm step before adding the row — do not block, only warn). Flag this exact
+        sub-rule as uncertain in your completion report; the spec itself says "לחשוב עם דנה על
+        הלוגיקה" (open question in the source doc, not yet resolved by the farm's own team) — so
+        a reasonable, simple implementation is acceptable, don't over-engineer it.
+
+  B5. שיווק (marketing) — quote page 18: "כל המפרט זהה לזה של העברות דילול ופירוק" except the
+      שלב באיכלוס auto-lock described in B1.
+
+  B6. Supplier schema addition (small, needed for B3): add to prisma/schema.prisma:
+        model Supplier {
+          id     String  @id @default(cuid())
+          name   String  @unique
+          active Boolean @default(true)
+          transferHeaders FishTransferHeader[]
+        }
+      Add `supplierId String?` + `supplier Supplier? @relation(...)` to FishTransferHeader. Run
+      `npx prisma migrate dev` (or equivalent for this project's existing migration flow — check
+      how prior migrations were applied in this repo) and add 3-5 plausible Hebrew supplier names
+      to seed.ts (e.g. "דגי הגליל בע"מ") guarded the same way other seed data is (idempotent
+      upsert, matches existing seed.ts conventions).
+
+  B7. תמותה (mortality) — quote page 19: "דיווח תמותה אינו העברה" (mortality reporting is
+      explicitly NOT a transfer) followed by "מסכים חדשים" (new screens) with no further detail
+      visible in the extracted text (the rest of that page is an image-only mockup). Do NOT
+      rebuild תמותה under the transfer 3-part structure — leave the current תמותה handling exactly
+      as-is, this section only applies to קניה/דילול/פירוק/שיווק. Note in your completion report
+      that תמותה may need its own dedicated screen later per this quote — flag it, don't build it
+      now (out of scope for this prompt).
+
+================================================================================
+SECTION B — draft-save mechanism (pages 15-16)
+================================================================================
+
+Quotes: "מכיוון שתהליך ההעברה הוא ארוך- יש אפשרות לשמירת טיוטה כדי לאפשר דיווח הדרגתי." /
+"בתחתית הדף יש כפתור שמאפשר שמירה זמנית של הדיווחים כטיוטה" / "אם מתחילים דיווח ומנסים לצאת למסך
+אחר- צריכה לצאת הודעת אזהרה... האם לשמור לטיוטות את המידע הקיים" / "ניתן לייבא מטיוטא באחת משתי
+השיטות: ללחוץ על כפתור ייבוא טיוטה ולבחור אחד מהבריכות שנשמרו כטיוטה / למלא פרטי בריכה ותאריך- אם
+מזוהה שנשמרה טיוטה למחזור זה- יתבצע ייבוא פרטי הטיוטה."
+
+Button-state quote (page 16): "בכל רגע נתון יש רק כפתור שמירה פעיל אחד: כל עוד יש שורות של טנקים
+פתוחים שלא נסגרו- רק כפתור 'שמור כטיוטה' פעיל. כאשר כל השורות נסגרו אז רק 'סכם העברה' פעיל."
+
+Implement:
+  1. The transfer header IS the draft today (`FishTransferHeader.status = "טיוטא"` on creation) —
+     keep that. "שמור כטיוטה" in this context = just leave the form, no special action needed
+     beyond what already exists (each row write is already persisted immediately via existing
+     POST/PATCH detail endpoints — there is no separate explicit draft-save call to add here,
+     the "draft" already lives in the DB row by row).
+  2. Replace the current single "סמן כהושלמה" button with the two-button rule above:
+     - While ANY Part-B (open) row exists → only show/enable "שמור כטיוטה" (a no-op navigation
+       button back to /transfers, since rows are already saved — just relabel/repurpose what's
+       there).
+     - Only when Part B is empty (all rows moved to Part C, i.e., closed) AND at least one row
+       exists → enable "סכם העברה" (rename from "סמן כהושלמה" to match spec wording exactly),
+       which PATCHes header status to "הסתיימה" as today.
+     - If Part B has open rows, "סכם העברה" must be disabled (not hidden — disabled with a tooltip
+       or helper text explaining why, e.g. "יש לסגור את כל הטנקים לפני סיכום ההעברה").
+  3. Add a route-change/unload guard on this page: if there are unsaved local-state edits in the
+     add-row form (not yet POSTed) and the user tries to navigate away, show a confirm dialog:
+     "פרטי ההעברה ישמרו כטיוטה. לצאת?" — use Next.js's router event or a `beforeunload` listener,
+     whichever fits this Next.js version's app-router patterns already used elsewhere in the repo.
+  4. On /transfers/new: add a "ייבוא טיוטה" button next to the existing pond+date+type form that
+     opens a small picker listing all FishTransferHeader rows with status="טיוטא" (pond + date +
+     type), and selecting one navigates straight to /transfers/[id] instead of creating a new
+     header. Also: when the user fills pond+date (and a matching open-status header already
+     exists for that pond+date+type combination), auto-redirect to the existing draft instead of
+     creating a duplicate — the existing `@@unique([cycleId, sourcePondId, transferDate])`
+     constraint on FishTransferHeader already prevents true duplicates at the DB level, so this is
+     about UX (detect-and-redirect) not data integrity.
+
+================================================================================
+SECTION C — RBAC bug: viewer role is fully blocked from reading transfers/weighings
+================================================================================
+
+Exact quote (page 14): "העברות. הרשאות גישה למסך: לכל בעלי התפקידים ('מנהל צופה' יכול לצפות אבל
+לא לערוך)." — ALL roles can access the transfers screen; the "מנהל צופה" role (VIEW_ONLY,
+accessLevel 5 in src/lib/permissions.ts) can VIEW but not edit.
+
+Current bug: every transfers/weighings GET endpoint and page-level gate requires
+`AccessLevel.OPERATIONS` (4), which excludes VIEW_ONLY (5) entirely — a "מנהל צופה" user gets a
+403 / redirect even just opening the list. This is a real, already-flagged gap — see the comment
+in src/app/api/transfers/route.ts: "RBAC ASSUMPTION:... Spec section doesn't state the permission
+level explicitly... Flag for confirmation with Dana/Ilan." The spec DOES state it explicitly (the
+quote above) — resolve that flagged assumption with this prompt.
+
+Fix: change every READ path to require `AccessLevel.VIEW_ONLY` instead of `AccessLevel.OPERATIONS`,
+and leave every WRITE path (POST/PATCH/DELETE) at `AccessLevel.OPERATIONS` (this correctly excludes
+only VIEW_ONLY and NO_ACCESS, matching "לכל בעלי התפקידים... מלבד מנהל צופה"). Specifically:
+  - src/app/api/transfers/route.ts — GET: VIEW_ONLY (POST stays OPERATIONS)
+  - src/app/api/transfers/[id]/route.ts — GET: VIEW_ONLY (PATCH stays OPERATIONS)
+  - src/app/api/transfers/[id]/details/route.ts — GET: VIEW_ONLY (POST stays OPERATIONS)
+  - src/app/api/transfers/[id]/details/[detailId]/route.ts — PATCH/DELETE stay OPERATIONS (no GET
+    here today, nothing to change)
+  - src/app/api/weighings/route.ts — GET: VIEW_ONLY (POST stays OPERATIONS)
+  - src/app/api/weighings/[id]/route.ts — GET: VIEW_ONLY (PATCH/DELETE stay OPERATIONS)
+  - src/app/api/weighings/[id]/baskets/route.ts — GET: VIEW_ONLY (POST stays OPERATIONS)
+  - src/app/transfers/page.tsx — change the page-level gate from
+    `meetsRequirement(level, AccessLevel.OPERATIONS)` to `meetsRequirement(level,
+    AccessLevel.VIEW_ONLY)`. Keep `canCreate` (the "+ העברה חדשה" button) gated at OPERATIONS —
+    that part is already correct, don't change it.
+  - src/app/transfers/[id]/page.tsx — same page-gate change to VIEW_ONLY. Then pass a `canEdit`
+    boolean (computed from `meetsRequirement(level, AccessLevel.OPERATIONS)`) down into
+    TransferDetailManager, and hide/disable every write control (add-row form, סגירת טנק, סכם
+    העברה, delete, weighing buttons) when `canEdit` is false — a "מנהל צופה" should see the full
+    3-part layout read-only, never an edit control. (The API already blocks writes server-side;
+    this is the matching UI-side hide, per the project's existing rule that hiding a button is not
+    a substitute for the server check but IS still required for a clean read-only experience.)
+  - src/app/transfers/new/page.tsx — this screen has no read-only use case (you can't "view" a
+    not-yet-created transfer) — leave its gate at OPERATIONS, don't change it.
+  - src/app/weighings/page.tsx — same page-gate change to VIEW_ONLY; keep any create/edit action
+    buttons on that page gated at OPERATIONS.
+Do NOT touch src/app/cycles/*, src/app/ponds/page.tsx, or any cycle API route — cycle screens are
+deliberately restricted to domain-managers+הנהלה per a different, separate spec rule (page 4: "רק
+לבעלי הרשאות ניהול תחום והנהלה"), already implemented correctly with EXECUTIVE-level gating; this
+section is only about the transfers/weighings viewer-access bug.
+
+================================================================================
+SECTION D — CloseForm.tsx fish-balance color scheme is wrong
+================================================================================
+
+Exact quote (page 9): "אם הפער -100 < X-Y-Z < 100 ההודעה תהיה בכחול או שחור, משמעות שהסיכום פחות
+או יותר מאוזן. אם הפער קטן מ-100 [וקטן מ +100-, i.e. <= -100]- זה אומר שכביכול הוצאו יותר דגים
+משנכנסו- הודעה אדומה. אם הפער [גדול מ]+100- זה אומר שכביכול הוכנסו יותר דגים משהוצאו- הודעה
+אדומה."
+
+So: -100 < difference < 100 → blue/black message (in-tolerance). difference <= -100 OR
+difference >= 100 → red message (out of tolerance), regardless of direction.
+
+Current bug in src/app/cycles/[pondId]/close/CloseForm.tsx (lines ~80-128): uses green/amber
+(`bg-green-50`/`bg-amber-50`, "✓ בטווח הסבול" / "⚠ מחוץ לטווח הסבול") instead of blue/black vs red.
+Fix:
+  - Within tolerance (`balance.withinTolerance === true`, i.e. -100 < difference < 100): use a
+    neutral blue/black style — e.g. `bg-blue-50 border-blue-200` with `text-gray-900` (black) body
+    text for the numbers, no green checkmark framing (the spec doesn't call for a checkmark, just
+    "כחול או שחור").
+  - Out of tolerance: change `bg-amber-50 border-amber-300` → `bg-red-50 border-red-300`, and the
+    amber text classes → `text-red-700`. Keep the existing "ניתן לסגור למרות החריגה" helper text
+    (the spec doesn't forbid closing out-of-tolerance, it just requires the red color to be
+    accurate).
+  - Check whether `balance.withinTolerance` is computed server-side (likely in the page.tsx loader
+    or an API route) using the correct strict `-100 < diff < 100` bounds (not `<=`/`>=`) — confirm
+    and fix if it's off-by-one against the exact inequality in the quote.
+  - Carry this same color logic into the confirmation-dialog version of this balance block once
+    CLAUDE_CODE_PROMPT_save_confirmation.txt is implemented (that prompt explicitly says to reuse
+    this block rather than duplicate it — make sure the reused block already has the right
+    colors, so you don't have to fix it twice).
+
+================================================================================
+GUARDRAILS
+================================================================================
+- Don't change RBAC for anything outside transfers/weighings GET endpoints (section C scope only).
+- Don't touch תמותה handling (B7) — out of scope.
+- Don't invent a "reopen tank" control — the spec only describes closing B→C, not the reverse.
+- Keep all existing audit-log calls; add audit entries for any new write paths (Supplier create,
+  transferMeans create) following the same `writeAudit` pattern used everywhere else in this repo.
+- Keep Hebrew RTL layout and existing INPUT/BTN_* style constants per file.
+- If anything in this prompt is ambiguous once you're in the code (e.g. exactly how TransferMeans
+  rows should be deduped, or how the dilution/breakdown "fish expected in pond" check should pull
+  its data), make the simplest reasonable call, but list every such judgment call explicitly in
+  your completion report so it can be checked against the spec/team intent rather than assumed
+  correct.
+
+================================================================================
+VERIFY BEFORE REPORTING DONE
+================================================================================
+1. Run `npx prisma migrate dev` (or this repo's equivalent) cleanly after the Supplier addition;
+   confirm `npx prisma generate` + a full `npm run build` still pass.
+2. Open /transfers/new, pick דילול, pick a pond+date with an open cycle: confirm the app cycle
+   code is shown, Part B is empty, Part C is empty, add-row form has all fields from B1+B4
+   including the new אמצעי העברה/מזהה רכב controls.
+3. Add a row, fill all required fields, click "סגירת טנק": confirm it disappears from Part B and
+   appears in Part C, and that the button was disabled before all fields were filled.
+4. With all rows closed, confirm "סכם העברה" becomes enabled and "שמור כטיוטה" becomes disabled (or
+   vice versa while rows are still open in Part B).
+5. Pick קניה: confirm the pond picker is hidden (auto-set to מחסן ראשי) and a supplier picker
+   appears and is required before the row can be added.
+6. Log in as a worker with only VIEW_ONLY access to תפעול: confirm /transfers and /transfers/[id]
+   load and display data with NO write controls visible, and that hitting the API write endpoints
+   directly still 403s (server-side check unchanged).
+7. Close a cycle with the balance computed at +50 (in tolerance) and again at +150 (out of
+   tolerance): confirm blue/black vs red rendering matches the spec quote exactly.

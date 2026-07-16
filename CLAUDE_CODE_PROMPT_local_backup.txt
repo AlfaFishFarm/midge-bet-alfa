@@ -1,0 +1,48 @@
+GOAL: a local, off-Neon backup of the DB's actual data, as a stopgap for the Free plan's
+6-hour-only point-in-time-recovery window (see task #40 - this doesn't replace upgrading
+the Neon plan eventually, it's a cheap safety net for right now).
+
+WHAT TO BUILD
+==============
+1. `prisma/scripts/backup-data.ts` — a small Node/ts-node script (no `pg_dump` dependency,
+   since that may not be installed locally; use the existing Prisma client instead):
+   - For every model in `schema.prisma` that holds real data (Worker, User minus
+     passwordHash — see note below, Pond, PondType, Tank, FishStrain, Product,
+     FishGrowthParameter, PopulationCode, GrowthCycle, TankBind, TransferMeans,
+     FishTransferHeader, FishTransferDetail, WeightType, FishWeighingHeader,
+     FishWeighingBasketDetail, GrowingStage, GrowingThreshold, Client, Order, Delivery,
+     DeliveryDetail, Translation, Role, AppModule, WorkerRole), run `findMany()` and
+     serialize the result to JSON.
+   - For `User`, omit `passwordHash` from the dump entirely — a backup file is not the
+     place for password hashes, even hashed ones, since it'll sit unencrypted on a local
+     disk. If a restore ever needs `User` rows, the password can be reset separately.
+   - Write one JSON file per run to `backups/YYYY-MM-DD_HH-mm/` (one file per model, plus a
+     `manifest.json` with row counts per model and the timestamp) — not a single giant file,
+     so a human can skim row counts without loading everything.
+   - Add an npm script: `"backup": "ts-node prisma/scripts/backup-data.ts"` (or the
+     project's existing ts-node/tsx runner — check `package.json` for which is already used
+     by `seed.ts` and match it).
+
+2. **Gitignore it.** Add `backups/` to `.gitignore` right next to the existing
+   `prisma/seed-data/*.local.ts` entry — these backup files will contain the same real
+   worker PII, so the same rule applies: never versioned, never pushed.
+
+3. Run it once now (`npm run backup`) against the current Neon **dev** branch (per `.env`)
+   and report back: where the files landed, the manifest's row counts (so I can sanity-check
+   them against the known seed targets — 49 ponds, 8 fish strains, 13 products, 19 workers),
+   and the total size on disk.
+
+4. In your final report, also suggest (don't implement unless asked) how the user could
+   automate this going forward on their own machine — e.g. Windows Task Scheduler running
+   `npm run backup` on a daily schedule from this project folder. Just describe the steps,
+   don't set it up yourself — that's a one-time manual setup on their machine, not something
+   to script blindly.
+
+GUARDRAILS (same as always in this repo)
+===========================================
+- Read-only against the DB — `findMany()` only, never write/delete anything.
+- Don't touch `schema.prisma`, don't run any `prisma migrate`/`db push`/`reset` command.
+- Don't commit the backup files (see step 2) or change `.env`.
+- Keep the script simple — this is a stopgap, not a full backup system. No need for
+  compression, encryption, or retention/rotation logic right now; flag in a comment if you
+  think it's worth adding later, but don't build it unasked.
