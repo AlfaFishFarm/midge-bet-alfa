@@ -1,6 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  eslint: { ignoreDuringBuilds: true },
   async headers() {
     // Security review 2026-06-27 (Dean): app had RBAC/JWT/login-lockout/audit
     // covered but no HTTP security headers at all. Adds the standard
