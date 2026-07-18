@@ -38,6 +38,7 @@ interface Props {
   transferRows: TransferRowData[];
   weighingRows: WeighingRowData[];
   cycleRows: CycleRowData[];
+  canApprove: boolean;   // true only for DOMAIN_MANAGE on "תפעול"
 }
 
 function buildSummaryText(
@@ -100,6 +101,7 @@ export default function DailySummaryActions({
   transferRows,
   weighingRows,
   cycleRows,
+  canApprove,
 }: Props) {
   const [notes, setNotes] = useState("");
   const [summaryText, setSummaryText] = useState<string | null>(null);
@@ -136,6 +138,7 @@ export default function DailySummaryActions({
 
   return (
     <>
+      {canApprove && <>
       {/* Prototype: .form-card { background:white; border-radius:14px; padding:20px 18px;
           box-shadow:0 2px 14px rgba(0,0,0,0.07); margin-bottom:14px; }
           .form-label { display:block; font-size:13px; font-weight:600; color:#374151; margin-bottom:6px; }
@@ -224,6 +227,8 @@ export default function DailySummaryActions({
         <span>✅</span>
         <span>סיכום תפעול וסגירת יום</span>
       </button>
+
+      </>}
 
       {/* Summary modal overlay */}
       {summaryText !== null && (

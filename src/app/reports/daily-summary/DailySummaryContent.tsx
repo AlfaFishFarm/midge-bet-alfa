@@ -1,6 +1,8 @@
 // Shared server component — renders daily summary data for a given date.
 // Used by both /reports/daily-summary/page.tsx and /dashboard (tab embed).
 import { prisma } from "@/lib/db";
+import { getCurrentUser } from "@/lib/current-user";
+import { bestAccessForModule, AccessLevel } from "@/lib/permissions";
 import DateNav from "./DateNav";
 import DailySummaryActions from "./DailySummaryActions";
 
@@ -76,6 +78,14 @@ interface Props {
 
 export default async function DailySummaryContent({ dateStr, basePath, tab }: Props) {
   const activeTab: TabSlug = (tab === "feed" || tab === "health") ? tab : "ops";
+
+  // Permissions — each manager can only close their own domain
+  const user = await getCurrentUser();
+  const perms = user?.permissions ?? [];
+  const canApproveOps    = bestAccessForModule(perms, "תפעול")  <= AccessLevel.DOMAIN_MANAGE;
+  const canApproveFeed   = bestAccessForModule(perms, "הזנה")   <= AccessLevel.DOMAIN_MANAGE;
+  const canApproveHealth = bestAccessForModule(perms, "בריאות") <= AccessLevel.DOMAIN_MANAGE;
+
   const dayStart = new Date(`${dateStr}T00:00:00`);
   const dayEnd = new Date(dayStart);
   dayEnd.setDate(dayEnd.getDate() + 1);
@@ -193,7 +203,7 @@ export default async function DailySummaryContent({ dateStr, basePath, tab }: Pr
               <DsTable headers={["בריכה", "פעולה", "מחזור", "שעה"]} rows={cycleRows.map((r) => [r.pond, r.action, r.cycle, r.time])} keys={cycleRows.map((r) => r.id)} centeredCols={[3]} />
             )}
           </SummarySection>
-          <DailySummaryActions dateLabel={dateLabel} transferRows={transferRows} weighingRows={weighingRows} cycleRows={cycleRows} />
+          <DailySummaryActions dateLabel={dateLabel} transferRows={transferRows} weighingRows={weighingRows} cycleRows={cycleRows} canApprove={canApproveOps} />
         </div>
       )}
 
@@ -202,11 +212,13 @@ export default async function DailySummaryContent({ dateStr, basePath, tab }: Pr
         <div style={{ display: "flex", flexDirection: "column", gap: "0" }}>
           <SummarySection title="🌬️ חריגות חמצן"><EmptyState text="אין חריגות חמצן להיום" /></SummarySection>
           <SummarySection title="⛔ הפסקת הזנה"><EmptyState text="אין הפסקות הזנה להיום" /></SummarySection>
-          <div style={{ marginTop: 8 }}>
-            <button disabled style={{ width: "100%", padding: "14px", borderRadius: "10px", border: "none", fontSize: "15px", fontWeight: 700, color: "white", background: "#9ca3af", display: "flex", alignItems: "center", justifyContent: "center", gap: "8px", cursor: "not-allowed", fontFamily: "inherit", opacity: 0.7 }}>
-              <span>📋</span><span>סיכום הזנה — בפיתוח</span>
-            </button>
-          </div>
+          {canApproveFeed && (
+            <div style={{ marginTop: 8 }}>
+              <button disabled style={{ width: "100%", padding: "14px", borderRadius: "10px", border: "none", fontSize: "15px", fontWeight: 700, color: "white", background: "#9ca3af", display: "flex", alignItems: "center", justifyContent: "center", gap: "8px", cursor: "not-allowed", fontFamily: "inherit", opacity: 0.7 }}>
+                <span>📋</span><span>סיכום הזנה — בפיתוח</span>
+              </button>
+            </div>
+          )}
         </div>
       )}
 
