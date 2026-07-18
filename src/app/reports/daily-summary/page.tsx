@@ -16,7 +16,7 @@ function todayStr(): string {
 export default async function DailySummaryPage({
   searchParams,
 }: {
-  searchParams: { date?: string };
+  searchParams: { date?: string; tab?: string };
 }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
@@ -56,7 +56,7 @@ export default async function DailySummaryPage({
           <div style={{ fontSize: "22px", fontWeight: 900, color: "#1A2B1F", letterSpacing: "-0.3px" }}>סיכום יומי</div>
         </div>
       </div>
-      <DailySummaryContent dateStr={dateStr} />
+      <DailySummaryContent dateStr={dateStr} tab={searchParams.tab} />
     </div>
   );
 }

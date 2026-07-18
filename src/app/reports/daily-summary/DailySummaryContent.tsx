@@ -54,12 +54,28 @@ function DsTable({ headers, rows, keys, centeredCols = [] }: { headers: string[]
   );
 }
 
+type TabSlug = "ops" | "treatments" | "tests";
+
+const TABS: { slug: TabSlug; label: string; icon: string }[] = [
+  { slug: "ops",        label: "תפעול",           icon: "🔄" },
+  { slug: "treatments", label: "טיפולים ומים",    icon: "💊" },
+  { slug: "tests",      label: "בדיקות",           icon: "🐟" },
+];
+
+function tabHref(basePath: string | undefined, dateStr: string, slug: TabSlug) {
+  const base = basePath ?? "/reports/daily-summary";
+  const sep = base.includes("?") ? "&" : "?";
+  return `${base}${sep}date=${dateStr}&tab=${slug}`;
+}
+
 interface Props {
   dateStr: string;        // yyyy-mm-dd
   basePath?: string;      // passed to DateNav for routing — default "/reports/daily-summary"
+  tab?: string;           // active tab slug, default "ops"
 }
 
-export default async function DailySummaryContent({ dateStr, basePath }: Props) {
+export default async function DailySummaryContent({ dateStr, basePath, tab }: Props) {
+  const activeTab: TabSlug = (tab === "treatments" || tab === "tests") ? tab : "ops";
   const dayStart = new Date(`${dateStr}T00:00:00`);
   const dayEnd = new Date(dayStart);
   dayEnd.setDate(dayEnd.getDate() + 1);
@@ -122,39 +138,90 @@ export default async function DailySummaryContent({ dateStr, basePath }: Props) 
   return (
     <div style={{ flex: 1, padding: "16px 16px 44px", maxWidth: "680px", margin: "0 auto", width: "100%" }} dir="rtl">
       {/* Date picker row */}
-      <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "16px", flexWrap: "wrap" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "14px", flexWrap: "wrap" }}>
         <label htmlFor="summary-date" style={{ fontSize: "13px", fontWeight: 600, color: "#374151", margin: 0 }}>בחר תאריך:</label>
         <DateNav date={dateStr} basePath={basePath} />
         <div style={{ fontSize: "13px", color: "#6B7A72", fontWeight: 500, margin: 0 }}>סיכום ל-{dateLabel}</div>
       </div>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: "0" }}>
-        <SummarySection title="🔄 העברות">
-          {transferRows.length === 0 ? <EmptyState text="אין פעולות העברות להיום" /> : (
-            <DsTable headers={['פעולה', 'דג', 'מקור', 'ספק', 'יעד', "מס' דגים", "ממוצע (גר')", 'משקל (ק"ג)']}
-              rows={transferRows.map((r) => [r.transferType, r.fish, r.source, r.supplier, r.dest, r.fishCount != null ? r.fishCount.toLocaleString("he-IL") : "—", r.avgWeightGrams != null ? Math.round(r.avgWeightGrams).toLocaleString("he-IL") : "—", r.totalWeightKg != null ? r.totalWeightKg.toFixed(1) : "—"])}
-              keys={transferRows.map((r) => r.id)} centeredCols={[5, 6, 7]} />
-          )}
-        </SummarySection>
-        <SummarySection title="⚖️ שקילות">
-          {weighingRows.length === 0 ? <EmptyState text="אין פעולות שקילות להיום" /> : (
-            <DsTable headers={['סוג', 'בריכה', 'דג', "מס' דגים", "ממוצע (גר')", 'משקל סה"כ (ק"ג)']}
-              rows={weighingRows.map((r) => [r.type, r.pond, r.fish, r.fishCount.toLocaleString("he-IL"), r.avgWeightGrams != null ? Math.round(r.avgWeightGrams).toLocaleString("he-IL") : "—", r.totalNetKg.toFixed(1)])}
-              keys={weighingRows.map((r) => r.id)} centeredCols={[3, 4, 5]} />
-          )}
-        </SummarySection>
-        <SummarySection title="🏊 פתיחות וסגירות בריכות">
-          {cycleRows.length === 0 ? <EmptyState text="אין פתיחות/סגירות בריכות להיום" /> : (
-            <DsTable headers={["בריכה", "פעולה", "מחזור", "שעה"]} rows={cycleRows.map((r) => [r.pond, r.action, r.cycle, r.time])} keys={cycleRows.map((r) => r.id)} centeredCols={[3]} />
-          )}
-        </SummarySection>
-        <SummarySection title="💊 טיפולים"><EmptyState text="אין פעולות טיפוליות להיום" /></SummarySection>
-        <SummarySection title="💧 בדיקות מים"><EmptyState text="אין בדיקות מים להיום" /></SummarySection>
-        <SummarySection title="🐟 בדיקות דגים"><EmptyState text="אין בדיקות דגים להיום" /></SummarySection>
-        <SummarySection title="⚠️ נתונים חריגים"><EmptyState text="אין נתונים חריגים להיום" /></SummarySection>
+      {/* Tab navigation */}
+      <div style={{ display: "flex", gap: 4, marginBottom: 14, borderBottom: "2px solid #e5e7eb", paddingBottom: 0 }}>
+        {TABS.map((t) => {
+          const isActive = t.slug === activeTab;
+          return (
+            <a
+              key={t.slug}
+              href={tabHref(basePath, dateStr, t.slug)}
+              style={{
+                display: "flex", alignItems: "center", gap: 5,
+                padding: "8px 14px", fontSize: 13, fontWeight: isActive ? 700 : 500,
+                color: isActive ? "#1B3A2B" : "#6b7280",
+                background: isActive ? "white" : "transparent",
+                borderRadius: "8px 8px 0 0",
+                border: isActive ? "2px solid #e5e7eb" : "2px solid transparent",
+                borderBottom: isActive ? "2px solid white" : "2px solid transparent",
+                textDecoration: "none",
+                marginBottom: isActive ? -2 : 0,
+                cursor: "pointer",
+              }}
+            >
+              <span>{t.icon}</span>{t.label}
+            </a>
+          );
+        })}
       </div>
 
-      <DailySummaryActions dateLabel={dateLabel} transferRows={transferRows} weighingRows={weighingRows} cycleRows={cycleRows} />
+      {/* Tab: תפעול */}
+      {activeTab === "ops" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0" }}>
+          <SummarySection title="🔄 העברות">
+            {transferRows.length === 0 ? <EmptyState text="אין פעולות העברות להיום" /> : (
+              <DsTable headers={['פעולה', 'דג', 'מקור', 'ספק', 'יעד', "מס' דגים", "ממוצע (גר')", 'משקל (ק"ג)']}
+                rows={transferRows.map((r) => [r.transferType, r.fish, r.source, r.supplier, r.dest, r.fishCount != null ? r.fishCount.toLocaleString("he-IL") : "—", r.avgWeightGrams != null ? Math.round(r.avgWeightGrams).toLocaleString("he-IL") : "—", r.totalWeightKg != null ? r.totalWeightKg.toFixed(1) : "—"])}
+                keys={transferRows.map((r) => r.id)} centeredCols={[5, 6, 7]} />
+            )}
+          </SummarySection>
+          <SummarySection title="⚖️ שקילות">
+            {weighingRows.length === 0 ? <EmptyState text="אין פעולות שקילות להיום" /> : (
+              <DsTable headers={['סוג', 'בריכה', 'דג', "מס' דגים", "ממוצע (גר')", 'משקל סה"כ (ק"ג)']}
+                rows={weighingRows.map((r) => [r.type, r.pond, r.fish, r.fishCount.toLocaleString("he-IL"), r.avgWeightGrams != null ? Math.round(r.avgWeightGrams).toLocaleString("he-IL") : "—", r.totalNetKg.toFixed(1)])}
+                keys={weighingRows.map((r) => r.id)} centeredCols={[3, 4, 5]} />
+            )}
+          </SummarySection>
+          <SummarySection title="🏊 פתיחות וסגירות בריכות">
+            {cycleRows.length === 0 ? <EmptyState text="אין פתיחות/סגירות בריכות להיום" /> : (
+              <DsTable headers={["בריכה", "פעולה", "מחזור", "שעה"]} rows={cycleRows.map((r) => [r.pond, r.action, r.cycle, r.time])} keys={cycleRows.map((r) => r.id)} centeredCols={[3]} />
+            )}
+          </SummarySection>
+          <DailySummaryActions dateLabel={dateLabel} transferRows={transferRows} weighingRows={weighingRows} cycleRows={cycleRows} />
+        </div>
+      )}
+
+      {/* Tab: טיפולים ומים */}
+      {activeTab === "treatments" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0" }}>
+          <SummarySection title="💊 טיפולים"><EmptyState text="אין פעולות טיפוליות להיום" /></SummarySection>
+          <SummarySection title="💧 בדיקות מים"><EmptyState text="אין בדיקות מים להיום" /></SummarySection>
+          <div style={{ marginTop: 8 }}>
+            <button disabled style={{ width: "100%", padding: "14px", borderRadius: "10px", border: "none", fontSize: "15px", fontWeight: 700, color: "white", background: "#9ca3af", display: "flex", alignItems: "center", justifyContent: "center", gap: "8px", cursor: "not-allowed", fontFamily: "inherit", opacity: 0.7 }}>
+              <span>✅</span><span>אישור מנהל טיפולים — בפיתוח</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Tab: בדיקות */}
+      {activeTab === "tests" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0" }}>
+          <SummarySection title="🐟 בדיקות דגים"><EmptyState text="אין בדיקות דגים להיום" /></SummarySection>
+          <SummarySection title="⚠️ נתונים חריגים"><EmptyState text="אין נתונים חריגים להיום" /></SummarySection>
+          <div style={{ marginTop: 8 }}>
+            <button disabled style={{ width: "100%", padding: "14px", borderRadius: "10px", border: "none", fontSize: "15px", fontWeight: 700, color: "white", background: "#9ca3af", display: "flex", alignItems: "center", justifyContent: "center", gap: "8px", cursor: "not-allowed", fontFamily: "inherit", opacity: 0.7 }}>
+              <span>✅</span><span>אישור מנהל בדיקות — בפיתוח</span>
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

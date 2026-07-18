@@ -221,8 +221,8 @@ export default function DailySummaryActions({
         onMouseEnter={(e) => ((e.currentTarget as HTMLButtonElement).style.background = "#7C3AB0")}
         onMouseLeave={(e) => ((e.currentTarget as HTMLButtonElement).style.background = "#9B59CF")}
       >
-        <span>📋</span>
-        <span>צור סיכום</span>
+        <span>✅</span>
+        <span>סיכום תפעול וסגירת יום</span>
       </button>
 
       {/* Summary modal overlay */}

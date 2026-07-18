@@ -162,6 +162,7 @@ export default function PondStatusClient() {
   const thStyle: React.CSSProperties = {
     padding: "10px 8px", textAlign: "right", fontWeight: 600,
     whiteSpace: "nowrap", fontSize: 12, color: "white",
+    position: "sticky", top: 0, zIndex: 10, background: "#12243d",
   };
   const tdStyle: React.CSSProperties = {
     padding: "8px 8px", fontSize: 12, color: "#1a2744",
@@ -279,7 +280,7 @@ export default function PondStatusClient() {
         ) : (
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead>
-              <tr style={{ background: "#12243d", color: "white", position: "sticky", top: 0, zIndex: 10 }}>
+              <tr style={{ background: "#12243d", color: "white" }}>
                 {visibleColDefs.map((c) => (
                   <th key={c.key} style={thStyle}>{c.label}</th>
                 ))}

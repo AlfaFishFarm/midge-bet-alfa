@@ -16,16 +16,10 @@ function todayStr(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-// The base path for DateNav when embedded in dashboard
-// e.g. /dashboard?view=daily-summary&date=2026-07-14
-function dashboardDatePath(view: View): string {
-  return `/dashboard?view=${view}`;
-}
-
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams: { view?: string; date?: string };
+  searchParams: { view?: string; date?: string; tab?: string };
 }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
@@ -43,14 +37,12 @@ export default async function DashboardPage({
       : todayStr();
 
   const activeStyle = (v: View) =>
-    view === v
-      ? "2px solid white"
-      : "none";
+    view === v ? "2px solid white" : "none";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", minHeight: "calc(100vh - 54px)", background: "#F2EDE3" }}>
 
-      {/* ── Sticky quick-nav buttons row — always visible ────────────────── */}
+      {/* Sticky quick-nav buttons row */}
       <div style={{
         background: "#243d2c",
         padding: "10px 14px",
@@ -63,7 +55,6 @@ export default async function DashboardPage({
         top: 54,
         zIndex: 190,
       }}>
-
         {/* חיישנים — disabled */}
         <div title="חיישנים — בקרוב" style={{ background: "linear-gradient(160deg,#F0983A,#D97B1A)", color: "white", border: "none", borderRadius: 9, padding: "7px 14px", fontFamily: "inherit", fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", gap: 6, boxShadow: "0 3px 0 #9E560E", whiteSpace: "nowrap", flexShrink: 0, opacity: 0.55, cursor: "not-allowed" }}>
           <span>📡</span>חיישנים
@@ -85,21 +76,30 @@ export default async function DashboardPage({
           <span>📊</span>מצב נוכחי
         </a>
 
-        {/* לוח שנה — disabled */}
-        <div title="לוח שנה — בקרוב" style={{ background: "linear-gradient(160deg,#9B59CF,#7C3AB0)", color: "white", border: "none", borderRadius: 9, padding: "7px 14px", fontFamily: "inherit", fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", gap: 6, boxShadow: "0 3px 0 #4E2270", whiteSpace: "nowrap", flexShrink: 0, opacity: 0.55, cursor: "not-allowed" }}>
+        {/* לוח שנה */}
+        <a
+          href="/calendar"
+          style={{ background: "linear-gradient(160deg,#9B59CF,#7C3AB0)", color: "white", border: "none", borderRadius: 9, padding: "7px 14px", fontFamily: "inherit", fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", gap: 6, boxShadow: "0 3px 0 #4E2270", whiteSpace: "nowrap", flexShrink: 0, textDecoration: "none" }}
+        >
           <span>📅</span>לוח שנה
-        </div>
+        </a>
       </div>
 
-      {/* ── Content pane — switches based on active tab ───────────────────── */}
+      {/* Content pane */}
       <div style={{ flex: 1, overflowY: "auto" }}>
 
         {view === "home" && (
-          <div style={{ padding: 14 }}>
+          <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 14 }}>
+            {/* הודעות הנהלה */}
+            <div style={{ background: "white", borderRadius: 14, boxShadow: "0 2px 12px rgba(0,0,0,0.07)", overflow: "hidden" }}>
+              <div style={{ background: "#1a3a5c", color: "white", padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>📢 הודעות הנהלה</div>
+              <div style={{ padding: "20px 14px", fontSize: 13, color: "#9ca3af", textAlign: "center", fontStyle: "italic" }}>אין הודעות הנהלה חדשות</div>
+            </div>
+            {/* התראות + בריכות אדומות */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
               <div style={{ background: "white", borderRadius: 14, boxShadow: "0 2px 12px rgba(0,0,0,0.07)", overflow: "hidden" }}>
-                <div style={{ background: "#1B3A2B", color: "white", padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>🔔 הודעות ועדכונים</div>
-                <div style={{ padding: "20px 14px", fontSize: 13, color: "#9ca3af", textAlign: "center" }}>אין הודעות חדשות</div>
+                <div style={{ background: "#1B3A2B", color: "white", padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>🔔 התראות</div>
+                <div style={{ padding: "20px 14px", fontSize: 13, color: "#9ca3af", textAlign: "center" }}>אין התראות חדשות</div>
               </div>
               <div style={{ background: "white", borderRadius: 14, boxShadow: "0 2px 12px rgba(0,0,0,0.07)", overflow: "hidden" }}>
                 <div style={{ background: "#8B2820", color: "white", padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>🔴 בריכות אדומות</div>
@@ -114,6 +114,7 @@ export default async function DashboardPage({
             <DailySummaryContent
               dateStr={dateStr}
               basePath="/dashboard?view=daily-summary"
+              tab={searchParams.tab}
             />
           </Suspense>
         )}
