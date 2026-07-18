@@ -54,10 +54,19 @@ export default async function DeliveryNewPage({
   let existingDelivery: any = null;
   if (deliveryId) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    existingDelivery = await (prisma.delivery as any).findUnique({
+    const raw = await (prisma.delivery as any).findUnique({
       where: { id: deliveryId },
       include: { details: true, client: true },
     });
+    if (raw) {
+      // Serialize Date → ISO string so client component receives a plain string
+      existingDelivery = {
+        ...raw,
+        date: raw.date instanceof Date
+          ? raw.date.toISOString().slice(0, 10)
+          : String(raw.date).slice(0, 10),
+      };
+    }
   }
 
   const serializedWorkers = workers.map((w) => ({

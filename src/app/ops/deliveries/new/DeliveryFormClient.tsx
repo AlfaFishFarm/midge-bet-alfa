@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { buildCertificateHtml } from "./certificate-html";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -69,6 +70,7 @@ interface Props {
     vetApprovalRef?: string | null;
     notes?: string | null;
     status: string;
+    certNumber?: string | null;
     details: DetailRow[];
     client?: { name: string; contactInfo: string } | null;
   } | null;
@@ -339,6 +341,43 @@ export default function DeliveryFormClient({
   }
   function removeDetail(idx: number) {
     setDetails((prev) => prev.filter((_, i) => i !== idx));
+  }
+
+  // ─── Print / export certificate ───────────────────────────────────────────────
+  // HTML generation is in certificate-html.ts (plain .ts, not .tsx) to avoid
+  // TSX parser confusion from HTML tags inside template literals.
+  function handlePrintCertificate() {
+    const selectedCarrierForPrint = carriers.find((c) => c.id === carrierId);
+    const html = buildCertificateHtml({
+      certNum: existingDelivery?.certNumber ?? "—",
+      dateFormatted: date
+        ? new Date(date + "T00:00:00").toLocaleDateString("he-IL", { day: "2-digit", month: "2-digit", year: "numeric" })
+        : "—",
+      loadingTime,
+      clientDisplayName: occasionalClient
+        ? (occasionalClientName || "לקוח מזדמן")
+        : (clients.find((c) => c.id === clientId)?.name ?? "—"),
+      clientContact: !occasionalClient
+        ? (clients.find((c) => c.id === clientId)?.contactInfo ?? "—")
+        : "—",
+      orderRef,
+      producerName: workers.find((w) => w.id === producerWorkerId)?.name ?? "—",
+      driverDisplay: occasionalDriver ? (driverName || "נהג מזדמן") : (selectedCarrierForPrint?.name ?? "—"),
+      plateDisplay: selectedCarrierForPrint?.licensePlate ?? "—",
+      vetApprovalRef,
+      notes,
+      managerName: workers.find((w) => w.id === managerId)?.name ?? "—",
+      managerId,
+      managerHasSig: !!(workers.find((w) => w.id === managerId)?.hasSignature),
+      details: details.map((d) => ({
+        transferDetailId: d.transferDetailId,
+        fishTypeDescription: d.fishTypeDescription,
+        sourcePondName: d.sourcePondName,
+        quantity: d.quantity,
+      })),
+    });
+    const win = window.open("", "_blank");
+    if (win) { win.document.write(html); win.document.close(); }
   }
 
   const statusBadge = existingDelivery ? ({
@@ -863,7 +902,21 @@ export default function DeliveryFormClient({
         </div>
       )}
 
-      {/* ══ כפתורי פעולה ════════════════════════════════════ */}
+      {/* ══ כפתורי פעולה ════════════════════════════════════════════════ */}
+      {readOnly && existingDelivery?.status === "הופק" && (
+        <div style={{ display: "flex", gap: 10, justifyContent: "center", marginTop: 8 }}>
+          <button
+            onClick={handlePrintCertificate}
+            style={{
+              padding: "11px 28px", borderRadius: 9, border: "none",
+              background: "#0F6E56", color: "#fff", fontSize: 15, fontWeight: 700,
+              cursor: "pointer", display: "flex", alignItems: "center", gap: 8,
+            }}
+          >
+            🖨️ הדפס / שמור PDF
+          </button>
+        </div>
+      )}
       {!readOnly && (
         <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", flexWrap: "wrap", marginTop: 8 }}>
           <button
