@@ -54,12 +54,12 @@ function DsTable({ headers, rows, keys, centeredCols = [] }: { headers: string[]
   );
 }
 
-type TabSlug = "ops" | "treatments" | "tests";
+type TabSlug = "ops" | "feed" | "health";
 
 const TABS: { slug: TabSlug; label: string; icon: string }[] = [
-  { slug: "ops",        label: "תפעול",           icon: "🔄" },
-  { slug: "treatments", label: "טיפולים ומים",    icon: "💊" },
-  { slug: "tests",      label: "בדיקות",           icon: "🐟" },
+  { slug: "ops",    label: "תפעול",  icon: "⚙️" },
+  { slug: "feed",   label: "הזנה",   icon: "🌾" },
+  { slug: "health", label: "בריאות", icon: "🩺" },
 ];
 
 function tabHref(basePath: string | undefined, dateStr: string, slug: TabSlug) {
@@ -75,7 +75,7 @@ interface Props {
 }
 
 export default async function DailySummaryContent({ dateStr, basePath, tab }: Props) {
-  const activeTab: TabSlug = (tab === "treatments" || tab === "tests") ? tab : "ops";
+  const activeTab: TabSlug = (tab === "feed" || tab === "health") ? tab : "ops";
   const dayStart = new Date(`${dateStr}T00:00:00`);
   const dayEnd = new Date(dayStart);
   dayEnd.setDate(dayEnd.getDate() + 1);
@@ -197,27 +197,29 @@ export default async function DailySummaryContent({ dateStr, basePath, tab }: Pr
         </div>
       )}
 
-      {/* Tab: טיפולים ומים */}
-      {activeTab === "treatments" && (
+      {/* Tab: הזנה */}
+      {activeTab === "feed" && (
         <div style={{ display: "flex", flexDirection: "column", gap: "0" }}>
-          <SummarySection title="💊 טיפולים"><EmptyState text="אין פעולות טיפוליות להיום" /></SummarySection>
-          <SummarySection title="💧 בדיקות מים"><EmptyState text="אין בדיקות מים להיום" /></SummarySection>
+          <SummarySection title="🌬️ חריגות חמצן"><EmptyState text="אין חריגות חמצן להיום" /></SummarySection>
+          <SummarySection title="⛔ הפסקת הזנה"><EmptyState text="אין הפסקות הזנה להיום" /></SummarySection>
           <div style={{ marginTop: 8 }}>
             <button disabled style={{ width: "100%", padding: "14px", borderRadius: "10px", border: "none", fontSize: "15px", fontWeight: 700, color: "white", background: "#9ca3af", display: "flex", alignItems: "center", justifyContent: "center", gap: "8px", cursor: "not-allowed", fontFamily: "inherit", opacity: 0.7 }}>
-              <span>✅</span><span>אישור מנהל טיפולים — בפיתוח</span>
+              <span>📋</span><span>סיכום הזנה — בפיתוח</span>
             </button>
           </div>
         </div>
       )}
 
-      {/* Tab: בדיקות */}
-      {activeTab === "tests" && (
+      {/* Tab: בריאות */}
+      {activeTab === "health" && (
         <div style={{ display: "flex", flexDirection: "column", gap: "0" }}>
+          <SummarySection title="💧 בדיקות מים"><EmptyState text="אין בדיקות מים להיום" /></SummarySection>
           <SummarySection title="🐟 בדיקות דגים"><EmptyState text="אין בדיקות דגים להיום" /></SummarySection>
-          <SummarySection title="⚠️ נתונים חריגים"><EmptyState text="אין נתונים חריגים להיום" /></SummarySection>
+          <SummarySection title="⚠️ חריגות מים"><EmptyState text="אין חריגות מים להיום" /></SummarySection>
+          <SummarySection title="💊 טיפולים"><EmptyState text="אין פעולות טיפולים להיום" /></SummarySection>
           <div style={{ marginTop: 8 }}>
             <button disabled style={{ width: "100%", padding: "14px", borderRadius: "10px", border: "none", fontSize: "15px", fontWeight: 700, color: "white", background: "#9ca3af", display: "flex", alignItems: "center", justifyContent: "center", gap: "8px", cursor: "not-allowed", fontFamily: "inherit", opacity: 0.7 }}>
-              <span>✅</span><span>אישור מנהל בדיקות — בפיתוח</span>
+              <span>📋</span><span>סיכום בריאות — בפיתוח</span>
             </button>
           </div>
         </div>
