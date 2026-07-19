@@ -1704,7 +1704,7 @@ input[type="datetime-local"]::-webkit-datetime-edit-ampm-field {
 /* === REACT ROUTE OVERRIDES ===
    בפרוטוטייפ מסכים מוסתרים/מוצגים דרך JS (showScreen).
    ב-Next.js כל מסך הוא route נפרד — תמיד גלוי. */
-.sub-screen          { display: flex !important; }
+.sub-screen          { display: flex !important; flex-direction: column !important; }
 #main-screen         { display: flex !important; }
 .pool-form-wrap      { display: flex !important; }
 .weighing-screen     { display: flex !important; }

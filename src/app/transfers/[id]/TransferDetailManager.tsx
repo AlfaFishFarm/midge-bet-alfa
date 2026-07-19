@@ -166,6 +166,7 @@ export default function TransferDetailManager({
   const [headerStatus, setHeaderStatus] = useState(header.status);
   const [headerNotes, setHeaderNotes] = useState(header.notes ?? "");
   const [notesSaving, setNotesSaving] = useState(false);
+  const [notesFeedback, setNotesFeedback] = useState<string | null>(null);
 
   const isWeighable = WEIGHABLE.includes(header.transferType);
   const isMortality = header.transferType === "תמותה";
@@ -554,12 +555,16 @@ export default function TransferDetailManager({
   // הערות חופשיות על אירוע התמותה — header-level notes, mortality only (spec page 19)
   async function saveHeaderNotes() {
     setNotesSaving(true);
+    setNotesFeedback(null);
     try {
-      await fetch(`/api/transfers/${header.id}`, {
+      const res = await fetch(`/api/transfers/${header.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ notes: headerNotes }),
       });
+      setNotesFeedback(res.ok ? "ההערות נשמרו ✓" : "שגיאה בשמירת ההערות — נסה שנית");
+    } catch {
+      setNotesFeedback("שגיאת תקשורת — ההערות לא נשמרו");
     } finally {
       setNotesSaving(false);
     }
@@ -1548,6 +1553,11 @@ export default function TransferDetailManager({
               {notesSaving ? "שומר..." : "שמור הערות"}
             </button>
           )}
+          {notesFeedback && (
+            <div className={`mt-1 text-xs ${notesFeedback.includes("✓") ? "text-green-600" : "text-red-600"}`}>
+              {notesFeedback}
+            </div>
+          )}
         </section>
       </div>
     );
@@ -1986,6 +1996,11 @@ export default function TransferDetailManager({
             >
               {notesSaving ? "שומר..." : "שמור הערות"}
             </button>
+          )}
+          {notesFeedback && (
+            <div className={`mt-1 text-xs ${notesFeedback.includes("✓") ? "text-green-600" : "text-red-600"}`}>
+              {notesFeedback}
+            </div>
           )}
         </section>
       )}

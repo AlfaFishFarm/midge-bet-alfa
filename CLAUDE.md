@@ -741,3 +741,37 @@ Pure domain logic lives in `src/lib/business-rules.ts` so it can be unit-tested 
 
 **Roster logic**: `page.tsx` (RegularSection) fetches distinct `fishStrainId` values from all `קניה` `FishTransferDetail` rows in the same `cycleId`+`sourcePondId` and passes them as `pondRosterStrainIds` prop. Empty array = no prior קניה = dialog never fires (first-ever fish). `NewTransferForm.tsx` passes `[]` unconditionally (new transfer has no history yet).
 
+
+### Line-by-line spec verification pass (2026-07-19)
+
+Full spec (v3, 50pp) re-read topic-by-topic against live code, per Dean's request. Fixes made:
+
+1. **Fish-balance bug (lib/cycles.ts)** — `getCycleFishBalance` counted incoming fish by `header.cycleId`, but a header's cycle is the SOURCE pond's cycle: קניה headers hang off the מחסן ראשי cycle and inter-pond דילול/פירוק hang off the other pond's cycle, so real ponds always showed 0 incoming (every close showed a false red deficit). Incoming is now counted by `destPondId` + the cycle's date window (open-day..closedAt/now). Outgoing/mortality still by header.cycleId (correct — source pond).
+2. **Silent save failures (6 places)** — finalize-transfer PATCH showed "✓ הצלחה" even when the server failed (worst); header-notes PATCH ×2, basket DELETE (removed from UI even on server failure), avg-weight sync PATCH, standalone-weighing basket loop (partial saves now report "נשמרו X מתוך Y"), client-carrier unlink. All now check `res.ok` and surface errors.
+3. **Dest-pond list (NewTransferForm)** — now excludes בור + virtual ponds per spec p38 ("לא וירטואלית ולא בור"), not just closed ponds.
+4. **Weighing confirm overlay** — added missing "סה"כ דגים" total (spec p44 requires total fish count; grid now 4 boxes).
+5. **Delivery-cert manual mode (spec p32)** — pond + fish are now list pickers (open real ponds; fish strains), with the specced warning dialog when the fish isn't registered as grown in the chosen pond (`pondFish` map computed in page.tsx from incoming transfer details within the pond's open cycle). Cancel clears the fish so unapproved values can't linger.
+6. **Deliveries RBAC** — management page + GET list were DOMAIN_MANAGE-only, wrongly locking out הנהלה (EXECUTIVE=3); aligned to EXECUTIVE like open/close-pool. Note: the linear access-level scheme cannot express "מנהל צופה yes / עובד תפעול no" (5 vs 4) — logged as open question 18א.
+
+Known intentional gap: spec wants the produced PDF stored as BLOB in the DB; currently generated on demand only (route comment marks it as future work — Dean aware).
+
+Calendar (spec p48) confirmed NOT buildable: 4 spec lines, prototype button is a "בקרוב" toast, no schema support for planned fish/actions — open question 18ב.
+
+### PDF-as-BLOB + role-based management access (2026-07-19, Dean: "כמו באיפיון")
+
+1. **PDF stored as BLOB (spec p32)** — `src/lib/delivery-pdf.ts` now owns certificate PDF generation (extracted from the /pdf route). `generateAndStoreDeliveryPdf` writes `Delivery.pdfBlob`. Finalize route generates+stores at הפקה (non-blocking: if Chromium fails, finalize still succeeds and the /pdf route generates+stores on first fetch). The /pdf route ALWAYS serves the stored blob when present — an issued certificate is frozen; template/signature/data changes never alter it. `pdfBlob` is stripped from the delivery GET JSON and from the edit page's client props (hundreds of KB).
+2. **`hasManagerRole(perms, module)` in permissions.ts** — manager-ness by ROLE NAME (contains "מנהל", or "מתכנת"), because the linear level scale can't express "מנהל צופה yes / עובד תפעול no" (5 vs 4). Applied: /ops "ניהול תפעול" button grayed (🔒 "למנהלים בלבד") for non-managers; /ops/management hub + deliveries mgmt page + GET /api/deliveries require manager role; open/close-pool pages allow manager role for read-only view while the ACTION routes stay EXECUTIVE-gated. Open question 18א resolved by this ruling.
+
+Sandbox: eslint cold-start currently exceeds the 45s bash window even for one file — rely on `timeout 43 npx tsc --noEmit --incremental --tsBuildInfoFile /tmp/tsbuild.info` (fast with warm cache) and run full lint locally.
+
+### Live browser E2E test round (2026-07-19, via Claude-in-Chrome on Dean's machine)
+
+Full happy-path verified working end-to-end on the running dev app: login→dashboard→ops nav; דילול transfer on pond 17 (auto cycle code, clean dest-pond list, weighing modal 2 baskets → weighted avg 506g synced back, fish count auto-computed 110, tank close, finalize with server verification ✓); delivery cert manual mode (new pond/fish pickers work, **fish-not-in-pond warning dialog fired correctly** for Mullet on pond 18 which only has Tilapia — pondFish map works on live data); finalize produced DC-20260719-001 with PDF stored as BLOB and served instantly from DB; PDF renders letterhead+signature+all fields.
+
+Fixed during the round:
+1. Hydration mismatch on /ops/deliveries/new — `loadingTime` initialized with `nowTimeStr()` ran on both server and client; minute tick between them threw React hydration errors. Now initialized empty + set in useEffect (client-only).
+2. Read-only delivery view showed "סה"כ משקל 0.0" — totalWeight used auto-mode tanks (empty) because `mode` defaults to "auto"; now uses saved details when readOnly.
+
+Known behavior (by design, worth remembering): "שמור והפק תעודה" saves the draft FIRST, then finalizes — if finalize validation fails (e.g. missing driver), a draft remains in תעודות פתוחות and a second click creates a SECOND delivery because the page still thinks it's new. Minor UX debt; consider redirecting to ?id= after the initial save.
+
+Test data left in DB (Dean may cancel/ignore): finished דילול transfer P117→P118 (110 Tilapia), delivery DC-20260719-001 (client "בדיקה - דין"), one leftover draft delivery.

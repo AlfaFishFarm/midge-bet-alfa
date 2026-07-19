@@ -203,7 +203,14 @@ export default function NewTransferForm({
   function getDestPonds(): Pond[] {
     if (transferType === "שיווק")
       return allPonds.filter((p) => p.pondTypeName === "בור" || p.pondTypeName === "מחסן שיווק");
-    return allPonds.filter((p) => p.hasActiveCycle && p.id !== pondId);
+    // Spec p38: dest ponds are growth ponds only — "לא וירטואלית ולא בור" — and open.
+    return allPonds.filter(
+      (p) =>
+        p.hasActiveCycle &&
+        p.id !== pondId &&
+        p.pondTypeName !== "בור" &&
+        !p.pondTypeName.includes("וירטואלית")
+    );
   }
 
   // shivuk population code id for locking שלב באכלוס
@@ -306,10 +313,11 @@ export default function NewTransferForm({
         setSavedDetailIds((prev) => ({ ...prev, [localId]: dId! }));
       } else if (Object.keys(meansBody).length > 0) {
         // Existing draft detail — PATCH with current means info so modal shows correct tank
-        await fetch(`/api/transfers/${hId}/details/${dId}`, {
+        const mRes = await fetch(`/api/transfers/${hId}/details/${dId}`, {
           method: "PATCH", headers: { "Content-Type": "application/json" },
           body: JSON.stringify(meansBody),
         });
+        if (!mRes.ok) throw new Error("שגיאה בעדכון אמצעי ההעברה — נסה שנית");
       }
       setWeighingTarget({ headerId: hId!, detailId: dId, localId });
     } catch (e: unknown) {
@@ -333,10 +341,11 @@ export default function NewTransferForm({
       if (savedHeaderId) {
         headerId = savedHeaderId;
         if (headerNotes.trim()) {
-          await fetch(`/api/transfers/${headerId}`, {
+          const nRes = await fetch(`/api/transfers/${headerId}`, {
             method: "PATCH", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ notes: headerNotes.trim() }),
           });
+          if (!nRes.ok) { setSaveError("שגיאה בשמירת ההערות — נסה שנית"); return; }
         }
       } else {
         const hBody: Record<string,unknown> = { transferDate, transferType };
@@ -398,11 +407,19 @@ export default function NewTransferForm({
       }
       if (dest === "detail") {
         // Finalize the transfer: PATCH header → הסתיימה (cascades details → סגירה).
-        await fetch(`/api/transfers/${headerId}`, {
+        // MUST verify success before showing ✓ — otherwise a failed finalize
+        // would leave the transfer as a draft while the user believes it's done.
+        const finRes = await fetch(`/api/transfers/${headerId}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ status: "הסתיימה" }),
         });
+        if (!finRes.ok) {
+          let finMsg = "שגיאה בסיום ההעברה — השורות נשמרו אך ההעברה נותרה טיוטא. נסה שנית";
+          try { const d = await finRes.json(); finMsg = d.error ?? finMsg; } catch {}
+          setSaveError(finMsg);
+          return;
+        }
         setSaveSuccess("ההעברה הושלמה ונשמרה בהצלחה ✓");
         setTimeout(() => router.push(`/transfers/${headerId}`), 1500);
       } else {

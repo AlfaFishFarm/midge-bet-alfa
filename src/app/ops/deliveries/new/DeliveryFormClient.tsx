@@ -3,7 +3,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { buildCertificateHtml } from "./certificate-html";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -58,6 +57,10 @@ interface Props {
   carriers: CarrierOption[];
   currentWorkerId: string | null;
   isManager: boolean;
+  // Spec p32 manual mode: pond + fish pickers from lists + not-in-pond warning
+  openPonds: { id: string; code: string; name: string }[];
+  pondFish: Record<string, string[]>; // pondId → fishStrainIds recorded in its open cycle
+  fishStrains: { id: string; label: string }[];
   existingDelivery: {
     id: string;
     clientId: string | null;
@@ -129,6 +132,7 @@ const tdStyle: React.CSSProperties = {
 
 export default function DeliveryFormClient({
   clients, workers, carriers, currentWorkerId, isManager, existingDelivery, viewOnly,
+  openPonds, pondFish, fishStrains,
 }: Props) {
   const router = useRouter();
   const isNew = !existingDelivery;
@@ -153,6 +157,9 @@ export default function DeliveryFormClient({
   const [tankVehicleHint, setTankVehicleHint] = useState<string | null>(null);
 
   const [details, setDetails] = useState<DetailRow[]>(existingDelivery?.details ?? []);
+  // Spec p32: fish chosen that is not registered as grown in the chosen pond →
+  // warning + explicit approval before keeping the value.
+  const [fishWarning, setFishWarning] = useState<{ idx: number; strainId: string; strainLabel: string } | null>(null);
 
   const [producerWorkerId, setProducerWorkerId] = useState(
     (existingDelivery as any)?.producerWorkerId ?? currentWorkerId ?? ""
@@ -162,8 +169,11 @@ export default function DeliveryFormClient({
     !(existingDelivery as any)?.carrierId && !!(existingDelivery as any)?.driverName
   );
   const [driverName, setDriverName] = useState((existingDelivery as any)?.driverName ?? "");
-  const [loadingTime, setLoadingTime] = useState(
-    (existingDelivery as any)?.loadingTime ?? nowTimeStr()
+  // Initialized empty and filled in useEffect below — computing nowTimeStr() in
+  // the initializer runs on BOTH server render and client hydration; when the
+  // minute ticks over between them React throws a hydration-mismatch error.
+  const [loadingTime, setLoadingTime] = useState<string>(
+    (existingDelivery as any)?.loadingTime ?? ""
   );
   const [editingTime, setEditingTime] = useState(false);
   const [orderRef, setOrderRef] = useState((existingDelivery as any)?.orderRef ?? "");
@@ -175,12 +185,18 @@ export default function DeliveryFormClient({
 
   const [saving, setSaving] = useState(false);
   const [finalizing, setFinalizing] = useState(false);
+  // Set after the first successful POST on a new form. Without it, a failed
+  // finalize (e.g. missing driver) left a draft behind and the NEXT click
+  // POSTed again — creating a duplicate delivery instead of updating the first.
+  const [createdId, setCreatedId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
-  // Live clock — auto-updates every 30s for new records, stops when user clicks to edit
+  // Live clock — set immediately on mount (client-only, avoids hydration mismatch)
+  // then auto-updates every 30s for new records, stops when user clicks to edit
   useEffect(() => {
     if (!isNew || editingTime || readOnly) return;
+    setLoadingTime(nowTimeStr());
     const timer = setInterval(() => setLoadingTime(nowTimeStr()), 30000);
     return () => clearInterval(timer);
   }, [isNew, editingTime, readOnly]);
@@ -212,7 +228,9 @@ export default function DeliveryFormClient({
   const selectedTanks = availableTanks.filter((t) => selectedTankIds.has(t.id));
   const unselectedTanks = availableTanks.filter((t) => !selectedTankIds.has(t.id));
 
-  const totalWeight = mode === "auto"
+  // In read-only view the table always renders the saved details, so the total
+  // must come from them too — `mode` defaults to "auto" and would show 0.0.
+  const totalWeight = mode === "auto" && !readOnly
     ? selectedTanks.reduce((s, t) => s + (t.totalWeightKg ?? 0), 0)
     : details.reduce((s, d) => s + d.quantity, 0);
 
@@ -244,18 +262,19 @@ export default function DeliveryFormClient({
         details: activeDetails,
       };
 
-      let deliveryId = existingDelivery?.id;
+      let deliveryId = existingDelivery?.id ?? createdId ?? undefined;
 
-      if (isNew) {
+      if (!deliveryId) {
         const res = await fetch("/api/deliveries", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
         if (!res.ok) { const e = await res.json(); throw new Error(e.error ?? "שגיאה בשמירה"); }
-        deliveryId = (await res.json()).id;
+        deliveryId = (await res.json()).id as string;
+        setCreatedId(deliveryId);
       } else {
-        const res = await fetch(`/api/deliveries/${existingDelivery!.id}`, {
+        const res = await fetch(`/api/deliveries/${deliveryId}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
@@ -303,17 +322,18 @@ export default function DeliveryFormClient({
         details: activeDetails,
       };
 
-      let deliveryId = existingDelivery?.id;
-      if (isNew) {
+      let deliveryId = existingDelivery?.id ?? createdId ?? undefined;
+      if (!deliveryId) {
         const res = await fetch("/api/deliveries", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
         if (!res.ok) { const e = await res.json(); throw new Error(e.error ?? "שגיאה בשמירה"); }
-        deliveryId = (await res.json()).id;
+        deliveryId = (await res.json()).id as string;
+        setCreatedId(deliveryId);
       } else {
-        const res = await fetch(`/api/deliveries/${existingDelivery!.id}`, {
+        const res = await fetch(`/api/deliveries/${deliveryId}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
@@ -344,40 +364,12 @@ export default function DeliveryFormClient({
   }
 
   // ─── Print / export certificate ───────────────────────────────────────────────
-  // HTML generation is in certificate-html.ts (plain .ts, not .tsx) to avoid
-  // TSX parser confusion from HTML tags inside template literals.
+  // Opens the server-generated PDF in a new tab.
+  // The server fetches the delivery data and renders it with Puppeteer.
+  // On Android, the browser's native share button → WhatsApp Business.
   function handlePrintCertificate() {
-    const selectedCarrierForPrint = carriers.find((c) => c.id === carrierId);
-    const html = buildCertificateHtml({
-      certNum: existingDelivery?.certNumber ?? "—",
-      dateFormatted: date
-        ? new Date(date + "T00:00:00").toLocaleDateString("he-IL", { day: "2-digit", month: "2-digit", year: "numeric" })
-        : "—",
-      loadingTime,
-      clientDisplayName: occasionalClient
-        ? (occasionalClientName || "לקוח מזדמן")
-        : (clients.find((c) => c.id === clientId)?.name ?? "—"),
-      clientContact: !occasionalClient
-        ? (clients.find((c) => c.id === clientId)?.contactInfo ?? "—")
-        : "—",
-      orderRef,
-      producerName: workers.find((w) => w.id === producerWorkerId)?.name ?? "—",
-      driverDisplay: occasionalDriver ? (driverName || "נהג מזדמן") : (selectedCarrierForPrint?.name ?? "—"),
-      plateDisplay: selectedCarrierForPrint?.licensePlate ?? "—",
-      vetApprovalRef,
-      notes,
-      managerName: workers.find((w) => w.id === managerId)?.name ?? "—",
-      managerId,
-      managerHasSig: !!(workers.find((w) => w.id === managerId)?.hasSignature),
-      details: details.map((d) => ({
-        transferDetailId: d.transferDetailId,
-        fishTypeDescription: d.fishTypeDescription,
-        sourcePondName: d.sourcePondName,
-        quantity: d.quantity,
-      })),
-    });
-    const win = window.open("", "_blank");
-    if (win) { win.document.write(html); win.document.close(); }
+    if (!existingDelivery?.id) return;
+    window.open(`/api/deliveries/${existingDelivery.id}/pdf`, "_blank");
   }
 
   const statusBadge = existingDelivery ? ({
@@ -663,22 +655,50 @@ export default function DeliveryFormClient({
                         </td>
                         <td style={tdStyle}>
                           {readOnly ? d.fishTypeDescription : (
-                            <input
-                              value={d.fishTypeDescription}
-                              onChange={(e) => updateDetail(idx, "fishTypeDescription", e.target.value)}
-                              style={{ ...inputStyle, padding: "5px 8px" }}
-                              placeholder="שם הדג"
-                            />
+                            <select
+                              value={fishStrains.find((f) => f.label === d.fishTypeDescription)?.id ?? ""}
+                              onChange={(e) => {
+                                const strain = fishStrains.find((f) => f.id === e.target.value);
+                                if (!strain) { updateDetail(idx, "fishTypeDescription", ""); return; }
+                                // Spec p32: if the fish is not registered as grown in the
+                                // chosen pond — warn and ask for explicit approval.
+                                const pond = openPonds.find((p) => p.name === d.sourcePondName);
+                                const registered = pond ? (pondFish[pond.id] ?? []).includes(strain.id) : true;
+                                if (pond && !registered) {
+                                  setFishWarning({ idx, strainId: strain.id, strainLabel: strain.label });
+                                } else {
+                                  updateDetail(idx, "fishTypeDescription", strain.label);
+                                }
+                              }}
+                              style={{ ...selectStyle, padding: "5px 8px" }}
+                            >
+                              <option value="">בחר דג...</option>
+                              {fishStrains.map((f) => (
+                                <option key={f.id} value={f.id}>{f.label}</option>
+                              ))}
+                            </select>
                           )}
                         </td>
                         <td style={tdStyle}>
                           {readOnly ? (d.sourcePondName ?? "—") : (
-                            <input
-                              value={d.sourcePondName ?? ""}
-                              onChange={(e) => updateDetail(idx, "sourcePondName", e.target.value)}
-                              style={{ ...inputStyle, padding: "5px 8px" }}
-                              placeholder="בריכת מקור"
-                            />
+                            <select
+                              value={openPonds.find((p) => p.name === d.sourcePondName)?.id ?? ""}
+                              onChange={(e) => {
+                                const pond = openPonds.find((p) => p.id === e.target.value);
+                                updateDetail(idx, "sourcePondName", pond?.name ?? "");
+                                // Fish already chosen? re-check it against the new pond (spec p32).
+                                const strain = fishStrains.find((f) => f.label === d.fishTypeDescription);
+                                if (pond && strain && !(pondFish[pond.id] ?? []).includes(strain.id)) {
+                                  setFishWarning({ idx, strainId: strain.id, strainLabel: strain.label });
+                                }
+                              }}
+                              style={{ ...selectStyle, padding: "5px 8px" }}
+                            >
+                              <option value="">בחר בריכה...</option>
+                              {openPonds.map((p) => (
+                                <option key={p.id} value={p.id}>{p.code} — {p.name}</option>
+                              ))}
+                            </select>
                           )}
                         </td>
                         <td style={{ ...tdStyle, textAlign: "center" }}>
@@ -831,11 +851,11 @@ export default function DeliveryFormClient({
           </Field>
         )}
 
-        <Field label="אישור וטרינרי (אופציונלי)">
+        <Field label="מספר תעודת בריאות (אופציונלי)">
           <input
             type="text" value={vetApprovalRef} disabled={readOnly}
             onChange={(e) => setVetApprovalRef(e.target.value)}
-            placeholder="מספר אישור וטרינרי"
+            placeholder="מספר תעודת בריאות"
             style={{ ...inputStyle, opacity: readOnly ? 0.7 : 1 }}
           />
         </Field>
@@ -913,7 +933,7 @@ export default function DeliveryFormClient({
               cursor: "pointer", display: "flex", alignItems: "center", gap: 8,
             }}
           >
-            🖨️ הדפס / שמור PDF
+            📄 שמור PDF
           </button>
         </div>
       )}
@@ -953,6 +973,45 @@ export default function DeliveryFormClient({
               {finalizing ? "מפיק..." : saving ? "שומר..." : "שמור והפק תעודה"}
             </button>
           )}
+        </div>
+      )}
+
+      {/* Spec p32: fish not registered as grown in the chosen pond — warn + require approval.
+          "זה אומר שיש פער בין הרישום באפליקציה והגידול בפועל - שצריך להשלים" */}
+      {fishWarning && (
+        <div
+          style={{ position: "fixed", inset: 0, zIndex: 70, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
+          onClick={(e) => { if (e.target === e.currentTarget) setFishWarning(null); }}
+        >
+          <div style={{ background: "white", borderRadius: 14, maxWidth: 420, width: "100%", padding: "20px 22px", boxShadow: "0 12px 40px rgba(0,0,0,0.25)" }} dir="rtl">
+            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: "#b45309" }}>⚠️ דג לא רשום בבריכה</h3>
+            <p style={{ fontSize: 13.5, color: "#374151", margin: "10px 0 4px", lineHeight: 1.6 }}>
+              הדג <strong>{fishWarning.strainLabel}</strong> אינו רשום כמגודל בבריכה שנבחרה.
+              ייתכן שיש פער בין הרישום באפליקציה לבין הגידול בפועל — שצריך להשלים.
+            </p>
+            <p style={{ fontSize: 13.5, color: "#374151", margin: "0 0 14px" }}>האם להמשיך בכל זאת?</p>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-start" }}>
+              <button
+                onClick={() => {
+                  updateDetail(fishWarning.idx, "fishTypeDescription", fishWarning.strainLabel);
+                  setFishWarning(null);
+                }}
+                style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: "#d97706", color: "white", fontSize: 13, fontWeight: 700, fontFamily: "inherit", cursor: "pointer" }}
+              >
+                אישור — המשך
+              </button>
+              <button
+                onClick={() => {
+                  // Not approved — clear the fish so an unapproved value can't linger in the row.
+                  updateDetail(fishWarning.idx, "fishTypeDescription", "");
+                  setFishWarning(null);
+                }}
+                style={{ padding: "8px 18px", borderRadius: 8, border: "1.5px solid #d1d5db", background: "white", color: "#374151", fontSize: 13, fontWeight: 700, fontFamily: "inherit", cursor: "pointer" }}
+              >
+                ביטול
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </>

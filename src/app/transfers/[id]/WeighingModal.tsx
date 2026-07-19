@@ -212,24 +212,40 @@ export default function WeighingModal({ transferId, detailId, onClose }: Props) 
     if (!weighingId) return;
     setSaving(true);
     try {
-      await fetch(`/api/weighings/${weighingId}/baskets/${basket.id}`, { method: "DELETE" });
+      const delRes = await fetch(`/api/weighings/${weighingId}/baskets/${basket.id}`, { method: "DELETE" });
+      if (!delRes.ok) {
+        let msg = "שגיאה במחיקת הסל — נסה שנית";
+        try { const d = await delRes.json(); msg = d.error ?? msg; } catch {}
+        setError(msg);
+        return;
+      }
       const remaining = baskets.filter((b) => b.id !== basket.id);
       setBaskets(remaining);
       const newTotal = remaining.reduce((s, b) => s + b.fishCount, 0);
       const newNet = remaining.reduce((s, b) => s + calcNetWeight(b), 0);
       const newAvg = newTotal > 0 ? (newNet / newTotal) * 1000 : null;
-      await syncAvgToDetail(newAvg);
+      // syncAvgToDetail sets the error state itself on failure; swallow the
+      // rethrow here since deleteBasket has no catch of its own.
+      await syncAvgToDetail(newAvg).catch(() => {});
     } finally {
       setSaving(false);
     }
   }
 
   async function syncAvgToDetail(avgGrams: number | null) {
-    await fetch(`/api/transfers/${transferId}/details/${detailId}`, {
+    const res = await fetch(`/api/transfers/${transferId}/details/${detailId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ avgWeightGrams: avgGrams }),
     });
+    if (!res.ok) {
+      // Surface the failure — the avg weight drives the transfer row, so a silent
+      // sync failure would leave the detail out of date without anyone noticing.
+      let msg = "שגיאה בעדכון משקל ממוצע בשורת ההעברה — נסה שנית";
+      try { const d = await res.json(); msg = d.error ?? msg; } catch {}
+      setError(msg);
+      throw new Error(msg);
+    }
   }
 
   // "שמור שקילה לאישור ושמירה" — spec page 21's confirm-and-save action. Creates the
@@ -574,13 +590,16 @@ export default function WeighingModal({ transferId, detailId, onClose }: Props) 
 
                 {/* Totals box — prototype: .weigh-confirm-totals: green bg/border, grid */}
                 <div
-                  className="grid grid-cols-3 gap-1.5 mb-3.5 rounded-[10px] px-2.5 py-2.5"
+                  className="grid grid-cols-4 gap-1.5 mb-3.5 rounded-[10px] px-2.5 py-2.5"
                   style={{ background: "#f0fdf4", border: "1.5px solid #bbf7d0" }}
                 >
+                  {/* Spec p44 summary row: total weight, TOTAL FISH COUNT, weighted avg —
+                      total-fish box added 2026-07-19 (was missing vs spec). */}
                   {[
-                    { label: "סלים",     value: String(baskets.length), unit: "" },
-                    { label: 'סה"כ ק"ג', value: totalNet.toFixed(2),   unit: 'ק"ג' },
-                    { label: "ממוצע",    value: overallAvgGrams ?? "—",    unit: 'גרם' },
+                    { label: "סלים",      value: String(baskets.length), unit: "" },
+                    { label: 'סה"כ דגים', value: String(totalFish),      unit: "" },
+                    { label: 'סה"כ ק"ג',  value: totalNet.toFixed(2),    unit: 'ק"ג' },
+                    { label: "ממוצע",     value: overallAvgGrams ?? "—", unit: 'גרם' },
                   ].map(({ label, value, unit }) => (
                     <div key={label} className="text-center">
                       <div className="text-[10px] font-bold" style={{ color: "#15803d" }}>{label}</div>

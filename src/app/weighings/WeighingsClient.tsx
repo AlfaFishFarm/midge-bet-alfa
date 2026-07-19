@@ -278,8 +278,9 @@ export default function WeighingsClient({
       const data = await res.json() as { id?: string; error?: string };
       if (!res.ok) { setConfirmError(data.error ?? "שגיאה ביצירת שקילה"); setSaving(false); return; }
       const wid = data.id!;
+      let savedCount = 0;
       for (const b of stagedBaskets) {
-        await fetch(`/api/weighings/${wid}/baskets`, {
+        const bRes = await fetch(`/api/weighings/${wid}/baskets`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -287,6 +288,16 @@ export default function WeighingsClient({
             fishCount: parseInt(b.fishCount, 10),
           }),
         });
+        if (!bRes.ok) {
+          // Stop and report exactly how many made it in — a silent partial save
+          // would leave the weighing missing baskets without anyone knowing.
+          let bMsg = "שגיאה בשמירת סל";
+          try { const bd = await bRes.json(); bMsg = bd.error ?? bMsg; } catch {}
+          setConfirmError(`${bMsg} — נשמרו ${savedCount} מתוך ${stagedBaskets.length} סלים. נסה שנית`);
+          setSaving(false);
+          return;
+        }
+        savedCount++;
       }
       setShowConfirm(false);
       window.location.reload();
