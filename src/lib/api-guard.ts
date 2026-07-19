@@ -24,14 +24,24 @@ export function withModuleAccess(
   handler: GuardedHandler
 ) {
   return async (req: NextRequest): Promise<NextResponse> => {
-    const user = await getCurrentUser();
-    if (!user) {
-      return NextResponse.json({ error: "לא מחובר" }, { status: 401 });
+    try {
+      const user = await getCurrentUser();
+      if (!user) {
+        return NextResponse.json({ error: "לא מחובר" }, { status: 401 });
+      }
+      const level = bestAccessForModule(user.permissions, moduleName);
+      if (!meetsRequirement(level, requiredLevel)) {
+        return NextResponse.json({ error: "אין לך הרשאה לבצע פעולה זו" }, { status: 403 });
+      }
+      return await handler(req, { user });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // Log server-side; never expose internal details to client
+      console.error(`[API ${req.method} ${req.nextUrl.pathname}]`, message);
+      return NextResponse.json(
+        { error: "שגיאת שרת פנימית — נסה שנית" },
+        { status: 500 }
+      );
     }
-    const level = bestAccessForModule(user.permissions, moduleName);
-    if (!meetsRequirement(level, requiredLevel)) {
-      return NextResponse.json({ error: "אין לך הרשאה לבצע פעולה זו" }, { status: 403 });
-    }
-    return handler(req, { user });
   };
 }

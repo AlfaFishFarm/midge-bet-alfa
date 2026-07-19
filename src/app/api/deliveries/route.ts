@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/current-user";
-import { bestAccessForModule, meetsRequirement, AccessLevel } from "@/lib/permissions";
+import { bestAccessForModule, meetsRequirement, AccessLevel, hasManagerRole } from "@/lib/permissions";
 import { writeAudit } from "@/lib/audit";
 
 // GET /api/deliveries?from=YYYY-MM-DD&to=YYYY-MM-DD
@@ -10,7 +10,9 @@ export async function GET(req: NextRequest) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const level = bestAccessForModule(user.permissions, "תפעול");
-  if (!meetsRequirement(level, AccessLevel.DOMAIN_MANAGE)) {
+  // Spec p31: list access for any manager-type role (ניהול תחום/הנהלה/מנהל צופה),
+  // matching the management page gate.
+  if (!meetsRequirement(level, AccessLevel.VIEW_ONLY) || !hasManagerRole(user.permissions, "תפעול")) {
     return NextResponse.json({ error: "אין הרשאה" }, { status: 403 });
   }
 

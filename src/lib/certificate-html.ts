@@ -16,6 +16,10 @@ export interface CertificateData {
   managerName: string;
   managerId: string;
   managerHasSig: boolean;
+  /** base64 data URL for the manager's signature image (used in server-side PDF to avoid auth issues) */
+  managerSigDataUrl?: string;
+  /** base64 data URL for the company stamp image */
+  stampDataUrl?: string;
   details: Array<{
     transferDetailId?: string | null;
     fishTypeDescription: string;
@@ -37,9 +41,17 @@ export function buildCertificateHtml(d: CertificateData): string {
     "</tr>",
   ].join("")).join("");
 
-  const sigHtml = d.managerHasSig && d.managerId
-    ? "<img src='/api/admin/workers/" + d.managerId + "/signature' alt='חתימה' style='max-height:56px;max-width:160px;object-fit:contain;' />"
+  // Prefer embedded data URL (server-side PDF); fall back to API URL (browser print)
+  const sigSrc = d.managerSigDataUrl
+    ? d.managerSigDataUrl
+    : (d.managerHasSig && d.managerId ? "/api/admin/workers/" + d.managerId + "/signature" : null);
+  const sigHtml = sigSrc
+    ? "<img src='" + sigSrc + "' alt='חתימה' style='max-height:56px;max-width:160px;object-fit:contain;' />"
     : "<div style='height:48px;'></div>";
+
+  const stampHtml = d.stampDataUrl
+    ? "<img src='" + d.stampDataUrl + "' alt='חותמת' style='max-height:72px;max-width:120px;object-fit:contain;opacity:0.85;' />"
+    : "";
 
   const notesSection = d.notes
     ? "<div style='margin-top:12px;'><div style='font-size:10px;color:#7a9a8a;margin-bottom:3px;'>הערות</div><div style='font-size:13px;font-weight:500;padding:6px 10px;background:#f7fbf9;border:1px solid #c8e0d8;border-radius:6px;'>" + d.notes + "</div></div>"
@@ -81,7 +93,7 @@ export function buildCertificateHtml(d: CertificateData): string {
     ".sig-area{text-align:center;}",
     ".sig-line{width:150px;border-top:1px solid #7a9a8a;margin-top:8px;margin-bottom:4px;}",
     ".sig-label{font-size:11px;color:#7a9a8a;}",
-    "@media print{@page{size:A4 portrait;margin:12mm}body{background:white;padding:0}.doc{box-shadow:none;border-radius:0;}}",
+    "@media print{@page{size:A4 portrait;margin:12mm}body{background:white;padding:0}.doc{box-shadow:none;border-radius:0;}.save-btn{display:none!important}}",
     "</style>",
     "</head>",
     "<body>",
@@ -91,7 +103,7 @@ export function buildCertificateHtml(d: CertificateData): string {
     "<div class='doc-header'>",
     "<div>",
     "<div style='font-size:17px;font-weight:600;color:#0F6E56;margin-bottom:5px;'>דגי גלבוע — אגש\"ח בע\"מ</div>",
-    "<div style='font-size:12px;color:#5a7a6e;line-height:1.9;'>קיבוץ בית אלפא 1080200<br>טל׳: 04-6533052 | פקס׳: 04-6533571<br>fishba@betalfa.org.il | ח.פ. 870061523</div>",
+    "<div style='font-size:12px;color:#5a7a6e;line-height:1.9;'>קיבוץ בית אלפא 1080200<br>טל׳: 04-6533052 | פקס׳: 04-6533571<br>fishba@betalfa.org.il | ח.פ. 570061523</div>",
     "</div>",
     "<div style='text-align:left;min-width:200px;'>",
     "<div class='doc-title'>תעודת משלוח</div>",
@@ -133,17 +145,21 @@ export function buildCertificateHtml(d: CertificateData): string {
     "<div><div class='field-lbl'>שם המשלח</div><div class='field-val'>" + d.producerName + "</div></div>",
     "<div><div class='field-lbl'>שם הנהג</div><div class='field-val'>" + d.driverDisplay + "</div></div>",
     "<div><div class='field-lbl'>מספר רישוי</div><div class='field-val'>" + d.plateDisplay + "</div></div>",
-    "<div><div class='field-lbl'>אישור וטרינרי</div><div class='field-val'>" + (d.vetApprovalRef || "—") + "</div></div>",
+    "<div><div class='field-lbl'>מספר תעודת בריאות</div><div class='field-val'>" + (d.vetApprovalRef || "—") + "</div></div>",
     "</div>",
     notesSection,
     "</div>",
 
     // Footer / signatures
     "<div class='doc-footer'>",
+    // Manager signature + stamp side-by-side
+    "<div style='display:flex;align-items:flex-end;gap:12px;'>",
     "<div class='sig-area'>",
     sigHtml,
     "<div class='sig-line'></div>",
     "<div class='sig-label'>חתימת אחראי: " + d.managerName + "</div>",
+    "</div>",
+    stampHtml ? "<div style='margin-bottom:24px;'>" + stampHtml + "</div>" : "",
     "</div>",
     "<div style='font-size:11px;color:#9abaa8;text-align:center;'>מסמך זה הופק ממערכת מידגה<br>" + today + "</div>",
     "<div class='sig-area'>",
@@ -154,7 +170,12 @@ export function buildCertificateHtml(d: CertificateData): string {
     "</div>",
 
     "</div>", // .doc
-    "<script>setTimeout(function(){window.print();},500);<" + "/script>",
+    "<div style='max-width:860px;margin:16px auto;text-align:center;'>",
+    "<button onclick='window.print()' class='save-btn' style='padding:12px 36px;background:#0F6E56;color:#fff;border:none;border-radius:10px;font-size:16px;font-weight:700;font-family:Heebo,Arial,sans-serif;cursor:pointer;'>",
+    "📄 שמור PDF",
+    "</button>",
+    "<p class='save-btn' style='font-size:12px;color:#9abaa8;margin-top:8px;'>לחץ שמור PDF ← בחר WhatsApp לשיתוף</p>",
+    "</div>",
     "</body>",
     "</html>",
   ].join("\n");

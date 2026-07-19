@@ -3,14 +3,20 @@ import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/current-user";
 import { bestAccessForModule, meetsRequirement, AccessLevel } from "@/lib/permissions";
 import { writeAudit } from "@/lib/audit";
+import { generateAndStoreDeliveryPdf } from "@/lib/delivery-pdf";
+
+// Needs Node runtime + time for Puppeteer (PDF is generated at הפקה per spec p32)
+export const runtime = "nodejs";
+export const maxDuration = 60;
 
 type Params = { params: Promise<{ id: string }> };
 
 // POST /api/deliveries/[id]/finalize
-// Manager-only: validates required fields, generates certNumber, sets status = "הופק".
-// Accepts both "טיוטא" and "ממתין לאישור" as starting states.
-// PDF generation (pdfBlob) is a future enhancement — spec says to store as BLOB.
+// Manager-only: validates required fields, generates certNumber, sets status = "הופק",
+// then generates the certificate PDF and stores it as a BLOB (spec p32) — the stored
+// copy is the frozen issued document. Accepts "טיוטא" and "ממתין לאישור" as starting states.
 export async function POST(_req: NextRequest, { params }: Params) {
+  try {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
@@ -90,5 +96,21 @@ export async function POST(_req: NextRequest, { params }: Params) {
     after: { status: "הופק", certNumber },
   });
 
-  return NextResponse.json(updated);
+  // Spec p32: store the certificate PDF as a BLOB at הפקה. If generation fails
+  // (e.g. Chromium unavailable), the finalize itself still succeeds — the PDF
+  // route will generate + store on first fetch as a fallback.
+  let pdfStored = false;
+  try {
+    await generateAndStoreDeliveryPdf(id);
+    pdfStored = true;
+  } catch (pdfErr) {
+    console.error("[finalize] PDF generation failed (will retry on first fetch):",
+      pdfErr instanceof Error ? pdfErr.message : String(pdfErr));
+  }
+
+  return NextResponse.json({ ...updated, pdfStored });
+  } catch (err) {
+    console.error("[POST /api/deliveries/[id]/finalize]", err);
+    return NextResponse.json({ error: "שגיאת שרת פנימית — נסה שנית" }, { status: 500 });
+  }
 }

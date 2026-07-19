@@ -7,6 +7,7 @@ import { writeAudit } from "@/lib/audit";
 type Params = { params: Promise<{ id: string }> };
 
 export async function PATCH(req: NextRequest, { params }: Params) {
+  try {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
@@ -65,23 +66,35 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   });
 
   return NextResponse.json(updated);
+  } catch (err) {
+    console.error("[PATCH /api/deliveries/[id]]", err);
+    return NextResponse.json({ error: "שגיאת שרת פנימית — נסה שנית" }, { status: 500 });
+  }
 }
 
 export async function GET(_req: NextRequest, { params }: Params) {
-  const user = await getCurrentUser();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  try {
+    const user = await getCurrentUser();
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const level = bestAccessForModule(user.permissions, "תפעול");
-  if (!meetsRequirement(level, AccessLevel.VIEW_ONLY)) {
-    return NextResponse.json({ error: "אין הרשאה" }, { status: 403 });
+    const level = bestAccessForModule(user.permissions, "תפעול");
+    if (!meetsRequirement(level, AccessLevel.VIEW_ONLY)) {
+      return NextResponse.json({ error: "אין הרשאה" }, { status: 403 });
+    }
+
+    const { id } = await params;
+    const delivery = await prisma.delivery.findUnique({
+      where: { id },
+      include: { client: true, details: true },
+    });
+
+    if (!delivery) return NextResponse.json({ error: "לא נמצא" }, { status: 404 });
+    // Never ship the stored PDF blob (spec p32) in the JSON payload — it can be
+    // hundreds of KB; the PDF has its own route.
+    const { pdfBlob: _pdfBlob, ...rest } = delivery as typeof delivery & { pdfBlob?: unknown };
+    return NextResponse.json(rest);
+  } catch (err) {
+    console.error("[GET /api/deliveries/[id]]", err);
+    return NextResponse.json({ error: "שגיאת שרת פנימית — נסה שנית" }, { status: 500 });
   }
-
-  const { id } = await params;
-  const delivery = await prisma.delivery.findUnique({
-    where: { id },
-    include: { client: true, details: true },
-  });
-
-  if (!delivery) return NextResponse.json({ error: "לא נמצא" }, { status: 404 });
-  return NextResponse.json(delivery);
 }
