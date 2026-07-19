@@ -232,7 +232,13 @@ export default function ClientsClient({ clients, carrierOptions, canEdit }: Prop
     if (!selectedClient || !confirmUnlinkCarrier) return;
     setLoading(true);
     try {
-      await fetch(`/api/clients/${selectedClient.id}/carriers/${confirmUnlinkCarrier.id}`, { method: "DELETE" });
+      const res = await fetch(`/api/clients/${selectedClient.id}/carriers/${confirmUnlinkCarrier.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        let msg = "שגיאה בהסרת הקישור — נסה שנית";
+        try { const d = await res.json(); msg = d.error ?? msg; } catch {}
+        setError(msg); setConfirmUnlinkCarrier(null);
+        return;
+      }
       router.refresh(); setConfirmUnlinkCarrier(null);
     } catch {
       setConfirmUnlinkCarrier(null); setError("שגיאת תקשורת. נסה שוב.");

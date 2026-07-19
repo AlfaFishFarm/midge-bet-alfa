@@ -1,17 +1,19 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getCurrentUser } from "@/lib/current-user";
-import { bestAccessForModule, meetsRequirement, AccessLevel } from "@/lib/permissions";
+import { bestAccessForModule, meetsRequirement, AccessLevel, hasManagerRole } from "@/lib/permissions";
 
 export default async function OpsManagementScreen() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
   const level = bestAccessForModule(user.permissions, "תפעול");
-  if (!meetsRequirement(level, AccessLevel.VIEW_ONLY)) {
+  // Spec p24: management screens are for manager-type roles only (ניהול תחום /
+  // הנהלה / מנהל צופה) — a regular field worker with תפעול access is blocked.
+  if (!meetsRequirement(level, AccessLevel.VIEW_ONLY) || !hasManagerRole(user.permissions, "תפעול")) {
     return (
       <main className="p-6">
-        <p className="text-red-600">אין לך הרשאה לצפות בעמוד זה.</p>
+        <p className="text-red-600">אין לך הרשאה לצפות בעמוד זה. מסכי ניהול תפעול זמינים למנהלים בלבד.</p>
       </main>
     );
   }

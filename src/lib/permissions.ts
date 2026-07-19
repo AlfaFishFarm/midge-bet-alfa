@@ -58,6 +58,23 @@ export function meetsRequirement(actual: number, required: number): boolean {
   return actual <= required;
 }
 
+/**
+ * Spec p23-24 (2026-07-19, Dean's ruling: "כמו באיפיון"): management screens are
+ * for manager-type roles only — ניהול תחום, הנהלה, וגם "מנהל צופה" (a manager
+ * whose access level is view-only) — but NOT for regular field workers. The
+ * linear access-level scale cannot express that (viewer-manager=5 sits "below"
+ * worker=4), so manager-ness is derived from the ROLE NAME: every manager role
+ * in the seed contains "מנהל" (מנהל מדגה/תפעול/הזנה/בריאות), plus "מתכנת"
+ * (admin/programmer, sweeping administration rights per spec).
+ */
+export function hasManagerRole(perms: ModuleAccess[], moduleName: string): boolean {
+  return perms.some(
+    (p) =>
+      p.moduleName === moduleName &&
+      (p.roleName.includes("מנהל") || p.roleName === "מתכנת")
+  );
+}
+
 export class PermissionError extends Error {
   constructor(message = "אין לך הרשאה לבצע פעולה זו") {
     super(message);

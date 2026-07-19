@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/current-user";
-import { bestAccessForModule, meetsRequirement, AccessLevel } from "@/lib/permissions";
+import { bestAccessForModule, meetsRequirement, AccessLevel, hasManagerRole } from "@/lib/permissions";
 import { prisma } from "@/lib/db";
 import DeliveriesClient from "./DeliveriesClient";
 
@@ -13,10 +13,13 @@ export default async function DeliveriesManagementPage() {
   if (!user) redirect("/login");
 
   const level = bestAccessForModule(user.permissions, "תפעול");
-  if (!meetsRequirement(level, AccessLevel.DOMAIN_MANAGE)) {
+  // Spec p31: screen access for ניהול תחום + הנהלה + מנהל צופה (read) — i.e. any
+  // manager-type role, at any level. Regular workers are blocked (Dean's ruling
+  // 2026-07-19: "כמו באיפיון"). Action endpoints stay level-gated server-side.
+  if (!meetsRequirement(level, AccessLevel.VIEW_ONLY) || !hasManagerRole(user.permissions, "תפעול")) {
     return (
       <main className="p-6" dir="rtl">
-        <p className="text-red-600">אין לך הרשאה לצפות בעמוד זה. נדרשות הרשאות ניהול תחום.</p>
+        <p className="text-red-600">אין לך הרשאה לצפות בעמוד זה. המסך זמין למנהלים בלבד.</p>
       </main>
     );
   }

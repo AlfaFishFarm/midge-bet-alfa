@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/current-user";
-import { bestAccessForModule, meetsRequirement, AccessLevel } from "@/lib/permissions";
+import { bestAccessForModule, meetsRequirement, AccessLevel, hasManagerRole } from "@/lib/permissions";
 import { prisma } from "@/lib/db";
 import { isVirtualPondType, getCycleFishBalance } from "@/lib/cycles";
 import ClosePoolClient from "./ClosePoolClient";
@@ -10,7 +10,9 @@ export default async function ClosePoolPage() {
   if (!user) redirect("/login");
 
   const level = bestAccessForModule(user.permissions, "תפעול");
-  if (!meetsRequirement(level, AccessLevel.EXECUTIVE)) {
+  // Spec p24: screen access for manager-type roles incl. מנהל צופה (read-only view);
+  // the close ACTION stays EXECUTIVE-gated in the API route.
+  if (!meetsRequirement(level, AccessLevel.EXECUTIVE) && !hasManagerRole(user.permissions, "תפעול")) {
     return (
       <main className="p-6">
         <p className="text-red-600">אין לך הרשאה לסגור מחזורי גידול.</p>

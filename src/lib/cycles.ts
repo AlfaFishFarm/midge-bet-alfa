@@ -23,20 +23,25 @@ export function formatCycleLabel(pondCode: string | null, openedAt: Date): strin
 export async function getCycleFishBalance(cycleId: string): Promise<
   FishBalanceResult & { incoming: number; outgoing: number; mortality: number }
 > {
-  const details = await prisma.fishTransferDetail.findMany({
+  const cycle = await prisma.growthCycle.findUnique({ where: { id: cycleId } });
+  if (!cycle) {
+    const empty = checkFishBalance({ incoming: 0, outgoing: 0, mortality: 0 });
+    return { ...empty, incoming: 0, outgoing: 0, mortality: 0 };
+  }
+
+  // Outgoing + mortality: transfers whose header belongs to this cycle — a
+  // header's cycle is always the SOURCE pond's cycle, so these are exactly the
+  // fish that left this pond (דילול/פירוק/שיווק) or died (תמותה).
+  const outDetails = await prisma.fishTransferDetail.findMany({
     where: { header: { cycleId } },
     select: { fishCount: true, header: { select: { transferType: true } } },
   });
 
-  let incoming = 0;
   let outgoing = 0;
   let mortality = 0;
-  for (const d of details) {
+  for (const d of outDetails) {
     const count = d.fishCount ?? 0;
     switch (d.header.transferType) {
-      case "קניה":
-        incoming += count;
-        break;
       case "דילול":
       case "פירוק":
       case "שיווק":
@@ -47,6 +52,26 @@ export async function getCycleFishBalance(cycleId: string): Promise<
         break;
     }
   }
+
+  // Incoming: transfer DETAILS whose destination is this cycle's pond, within
+  // the cycle's date window. Cannot be derived from header.cycleId — a קניה
+  // header hangs off the מחסן ראשי cycle (its source pond), and a דילול from
+  // another pond hangs off THAT pond's cycle. Filtering by header.cycleId alone
+  // counted zero incoming fish for every real pond (bug fixed 2026-07-19).
+  const windowStart = new Date(cycle.openedAt);
+  windowStart.setHours(0, 0, 0, 0); // transferDate is date-only; include the open day itself
+  const windowEnd = cycle.closedAt ?? new Date();
+  const inDetails = await prisma.fishTransferDetail.findMany({
+    where: {
+      destPondId: cycle.pondId,
+      header: {
+        transferType: { in: ["קניה", "דילול", "פירוק"] },
+        transferDate: { gte: windowStart, lte: windowEnd },
+      },
+    },
+    select: { fishCount: true },
+  });
+  const incoming = inDetails.reduce((sum, d) => sum + (d.fishCount ?? 0), 0);
 
   const balance = checkFishBalance({ incoming, outgoing, mortality });
   return { ...balance, incoming, outgoing, mortality };

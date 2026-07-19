@@ -1,13 +1,15 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getCurrentUser } from "@/lib/current-user";
-import { bestAccessForModule, meetsRequirement, AccessLevel } from "@/lib/permissions";
+import { bestAccessForModule, meetsRequirement, AccessLevel, hasManagerRole } from "@/lib/permissions";
 
 export default async function OpsScreen() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
   const level = bestAccessForModule(user.permissions, "תפעול");
+  // Spec p23: "ניהול תפעול - זמין ופעיל רק למנהלים והנהלה" — button grayed for others.
+  const isOpsManager = hasManagerRole(user.permissions, "תפעול");
   if (!meetsRequirement(level, AccessLevel.VIEW_ONLY)) {
     return (
       <main className="p-6">
@@ -36,13 +38,24 @@ export default async function OpsScreen() {
 
       <div style={{display:"flex",flexDirection:"column",gap:"14px",padding:"16px 20px",maxWidth:"680px",margin:"0 auto",width:"100%",boxSizing:"border-box"}}>
 
-        <Link href="/ops/management" style={{display:"flex",alignItems:"center",justifyContent:"space-between",background:"linear-gradient(135deg,#3D9A6A,#2C7A52)",border:"none",borderRadius:"14px",padding:"18px 22px",cursor:"pointer",fontFamily:"inherit",textDecoration:"none",boxShadow:"0 5px 0 #1A5435,0 6px 16px rgba(28,84,53,0.3)",transition:"all .15s"}}>
-          <div style={{display:"flex",flexDirection:"column",alignItems:"flex-start",gap:"2px"}}>
-            <span style={{fontSize:"17px",fontWeight:800,color:"white"}}>ניהול תפעול</span>
-            <span style={{fontSize:"12px",color:"rgba(255,255,255,0.7)"}}>การจัดการปฏิบัติงาน</span>
+        {isOpsManager ? (
+          <Link href="/ops/management" style={{display:"flex",alignItems:"center",justifyContent:"space-between",background:"linear-gradient(135deg,#3D9A6A,#2C7A52)",border:"none",borderRadius:"14px",padding:"18px 22px",cursor:"pointer",fontFamily:"inherit",textDecoration:"none",boxShadow:"0 5px 0 #1A5435,0 6px 16px rgba(28,84,53,0.3)",transition:"all .15s"}}>
+            <div style={{display:"flex",flexDirection:"column",alignItems:"flex-start",gap:"2px"}}>
+              <span style={{fontSize:"17px",fontWeight:800,color:"white"}}>ניהול תפעול</span>
+              <span style={{fontSize:"12px",color:"rgba(255,255,255,0.7)"}}>การจัดการปฏิบัติงาน</span>
+            </div>
+            <span style={{fontSize:"28px"}}>🗂️</span>
+          </Link>
+        ) : (
+          /* Spec p23: available+active only for managers — grayed for regular workers */
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",background:"linear-gradient(135deg,#3D9A6A,#2C7A52)",border:"none",borderRadius:"14px",padding:"18px 22px",cursor:"not-allowed",fontFamily:"inherit",boxShadow:"0 5px 0 #1A5435,0 6px 16px rgba(28,84,53,0.3)",transition:"all .15s",opacity:0.55}}>
+            <div style={{display:"flex",flexDirection:"column",alignItems:"flex-start",gap:"2px"}}>
+              <span style={{fontSize:"17px",fontWeight:800,color:"white"}}>ניהול תפעול</span>
+              <span style={{fontSize:"12px",color:"rgba(255,255,255,0.7)"}}>למנהלים בלבד</span>
+            </div>
+            <span style={{fontSize:"28px"}}>🔒</span>
           </div>
-          <span style={{fontSize:"28px"}}>🗂️</span>
-        </Link>
+        )}
 
         <Link href="/weighings" style={{display:"flex",alignItems:"center",justifyContent:"space-between",background:"linear-gradient(135deg,#3A8FD4,#2271B2)",border:"none",borderRadius:"14px",padding:"18px 22px",cursor:"pointer",fontFamily:"inherit",textDecoration:"none",boxShadow:"0 5px 0 #144D80,0 6px 16px rgba(20,77,128,0.3)",transition:"all .15s"}}>
           <div style={{display:"flex",flexDirection:"column",alignItems:"flex-start",gap:"2px"}}>
