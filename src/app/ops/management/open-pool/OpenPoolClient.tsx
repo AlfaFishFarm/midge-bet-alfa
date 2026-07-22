@@ -31,6 +31,27 @@ function nowStr() {
   return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 }
 
+// "YYYY-MM-DDTHH:mm" strings compare correctly as plain strings ONLY when the
+// hour is always 2 digits. The time field is free text, so a value like "9:24"
+// (no leading zero) breaks that assumption — lexicographic comparison then
+// treats "9:24" as greater than "14:10" (the char '9' > '1'), which falsely
+// flags an earlier same-day time as "in the future". Parse to a real Date
+// instead, padding hour/minute defensively, so comparisons are always correct
+// regardless of how the user typed the time.
+function toDateSafe(str: string): Date {
+  const [datePart, timePart = ""] = str.split("T");
+  const [hh = "00", mm = "00"] = timePart.split(":");
+  return new Date(`${datePart}T${hh.padStart(2, "0")}:${mm.padStart(2, "0")}`);
+}
+
+// Normalize a raw "HH:mm" text-field value (may be missing the leading zero)
+// into a proper 2-digit:2-digit string once the user leaves the field.
+function normalizeTime(t: string): string {
+  const m = t.match(/^(\d{1,2}):(\d{1,2})$/);
+  if (!m) return t;
+  return `${m[1].padStart(2, "0")}:${m[2].padStart(2, "0")}`;
+}
+
 function computeCycleCode(pond: PondOption | null, dateStr: string): string {
   if (!pond || !dateStr) return "";
   const code = pond.code ?? pond.name;
@@ -92,7 +113,7 @@ export default function OpenPoolClient({ ponds }: Props) {
     setError(null);
     if (!selectedPond) { setError("יש לבחור בריכה"); return; }
     if (!openedAt) { setError("יש להזין תאריך פתיחה"); return; }
-    if (openedAt > nowStr()) { setError("תאריך פתיחה לא יכול להיות בעתיד"); return; }
+    if (toDateSafe(openedAt) > new Date()) { setError("תאריך פתיחה לא יכול להיות בעתיד"); return; }
     setConfirmOpen(true);
   }
 
@@ -272,6 +293,7 @@ export default function OpenPoolClient({ ponds }: Props) {
               type="text"
               value={openedAt.slice(11,16)}
               onChange={(e) => setOpenedAt(`${openedAt.slice(0,10)}T${e.target.value}`)}
+              onBlur={(e) => setOpenedAt(`${openedAt.slice(0,10)}T${normalizeTime(e.target.value)}`)}
               placeholder="HH:mm"
               maxLength={5}
               disabled={!selectedPond || isLocked}

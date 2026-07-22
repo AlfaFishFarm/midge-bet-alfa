@@ -44,6 +44,26 @@ function nowStr() {
   return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 }
 
+// "YYYY-MM-DDTHH:mm" strings only sort correctly as plain strings when the hour
+// is always 2 digits. The time field is free text, so "9:24" (no leading zero)
+// breaks that — lexicographic comparison then treats "9:24" as greater than
+// "14:10" (char '9' > '1'), falsely flagging an earlier same-day time as "in
+// the future". Parse to a real Date instead, padding defensively, so date
+// comparisons are correct regardless of how the user typed the time.
+function toDateSafe(str: string): Date {
+  const [datePart, timePart = ""] = str.split("T");
+  const [hh = "00", mm = "00"] = timePart.split(":");
+  return new Date(`${datePart}T${hh.padStart(2, "0")}:${mm.padStart(2, "0")}`);
+}
+
+// Normalize a raw "HH:mm" text-field value (may be missing the leading zero)
+// once the user leaves the field.
+function normalizeTime(t: string): string {
+  const m = t.match(/^(\d{1,2}):(\d{1,2})$/);
+  if (!m) return t;
+  return `${m[1].padStart(2, "0")}:${m[2].padStart(2, "0")}`;
+}
+
 function computeCycleCode(pond: PondOption | null): string {
   if (!pond || !pond.cycle) return "—";
   const code = pond.code ?? pond.name;
@@ -129,8 +149,8 @@ export default function ClosePoolClient({ ponds, anyMissingPriority }: Props) {
     setError(null);
     if (!selectedPond || !selectedPond.cycle) { setError("יש לבחור בריכה"); return; }
     if (!closedAt) { setError("יש להזין תאריך סגירה"); return; }
-    if (closedAt > nowStr()) { setError("תאריך סגירה לא יכול להיות בעתיד"); return; }
-    if (closedAt < openedAtFull) { setError("תאריך סגירה לא יכול להיות לפני תאריך הפתיחה"); return; }
+    if (toDateSafe(closedAt) > new Date()) { setError("תאריך סגירה לא יכול להיות בעתיד"); return; }
+    if (toDateSafe(closedAt) < toDateSafe(openedAtFull)) { setError("תאריך סגירה לא יכול להיות לפני תאריך הפתיחה"); return; }
     if (!hasExistingCode && !priorityCycleCode) {
       setError("קוד Priority נדרש לסגירת מחזור — הזן קוד לפני הסגירה");
       return;
@@ -361,6 +381,7 @@ export default function ClosePoolClient({ ponds, anyMissingPriority }: Props) {
                 type="text"
                 value={closedAt.slice(11,16)}
                 onChange={(e) => setClosedAt(`${closedAt.slice(0,10)}T${e.target.value}`)}
+                onBlur={(e) => setClosedAt(`${closedAt.slice(0,10)}T${normalizeTime(e.target.value)}`)}
                 placeholder="HH:mm"
                 maxLength={5}
                 disabled={!selectedPond || (isEditClosed && !editUnlocked)}
